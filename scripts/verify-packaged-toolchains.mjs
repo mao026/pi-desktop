@@ -39,6 +39,8 @@ const layout = findPackagedLayout(dist, target);
 verifyPackagedResources(layout.resources, target);
 verifyPiRuntimeAssets(layout.resources, expectedPlatform, expectedArch);
 verifyBundledTools(layout.resources, expectedPlatform, expectedArch, !staticOnly);
+verifyTestBrowserAssets(layout.resources, expectedPlatform, expectedArch, !staticOnly);
+verifyTestAndroidAssets(layout.resources, expectedPlatform, expectedArch, !staticOnly);
 verifyLinuxSandbox(layout.executable, expectedPlatform);
 if (!staticOnly) {
   runPackagedStartup(layout.executable, target);
@@ -115,6 +117,8 @@ function verifyPackagedResources(resources, toolTarget) {
     ["PortableGit", "2.55.0.3"],
     ["jq", "1.8.2"],
     ["Bun", "1.3.14"],
+    ["Handsets", "0.1.38"],
+    ["Android SDK Platform-Tools", "37.0.1"],
   ]) {
     const tableRow = new RegExp(`^\\|\\s*${escapeRegExp(component)}\\s*\\|\\s*${escapeRegExp(version)}\\s*\\|`, "m");
     if (!tableRow.test(noticeText)) throw new Error(`Third-party notices are missing ${component} ${version}`);
@@ -131,6 +135,124 @@ function verifyPackagedResources(resources, toolTarget) {
     if (/PortableGit-.*\.exe$/i.test(relative)) forbidden.push(relative);
   });
   if (forbidden.length > 0) throw new Error(`Packaged managed runtime residue: ${forbidden.join(", ")}`);
+}
+
+function verifyTestBrowserAssets(resources, platform, arch, executeTools) {
+  const target = `${platform}-${arch}`;
+  const cliRoot = path.join(resources, "test-browser", target);
+  const manifest = JSON.parse(fs.readFileSync(path.join(cliRoot, "manifest.json"), "utf8"));
+  if (
+    manifest.schemaVersion !== 1 ||
+    manifest.cliVersion !== "0.3.7" ||
+    manifest.platform !== platform ||
+    manifest.arch !== arch ||
+    !safeRelativePath(manifest.executable)
+  ) {
+    throw new Error("Packaged agent-browser-cli manifest does not match the application");
+  }
+  assertExact(fs.readdirSync(cliRoot).sort(), [manifest.executable, "manifest.json"].sort(), "test browser CLI files");
+  const executable = path.join(cliRoot, manifest.executable);
+  if (platform === "darwin") {
+    verifyDarwinExecutable(executable, manifest.darwinCodeSha256, manifest.darwinCodeBytes);
+  } else {
+    verifyManifestFile(executable, manifest.sha256, manifest.bytes);
+  }
+  if (platform !== "win32" && (fs.statSync(executable).mode & 0o111) === 0) {
+    throw new Error("Packaged agent-browser-cli is not executable");
+  }
+  if (executeTools) {
+    const result = spawnSync(executable, ["--help"], { encoding: "utf8", timeout: 10_000, windowsHide: true });
+    if (result.status !== 0 || !result.stdout.includes("Usage: agent-browser-cli")) {
+      throw new Error(`Packaged agent-browser-cli failed: ${result.stderr || result.stdout}`);
+    }
+  }
+
+  const extensionRoot = path.join(resources, "chrome-extension");
+  const extensionManifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, "manifest.json"), "utf8"));
+  if (
+    extensionManifest.schemaVersion !== 1 ||
+    extensionManifest.extensionVersion !== "2.1" ||
+    !/^2\.1-pi-test\.\d+$/.test(extensionManifest.productExtensionVersion) ||
+    !Array.isArray(extensionManifest.files)
+  ) {
+    throw new Error("Packaged Chrome extension manifest is invalid");
+  }
+  const extension = path.join(extensionRoot, "tmwd_cdp_bridge");
+  const expected = extensionManifest.files.map((file) => file.path).sort();
+  const actual = [];
+  walkFiles(extension, (file) => actual.push(path.relative(extension, file).split(path.sep).join("/")));
+  assertExact(actual.sort(), expected, "Chrome extension files");
+  for (const file of extensionManifest.files) {
+    if (!safeRelativePath(file.path)) throw new Error("Unsafe Chrome extension manifest path");
+    verifyManifestFile(path.join(extension, ...file.path.split("/")), file.sha256, file.bytes);
+  }
+  const chromeManifest = JSON.parse(fs.readFileSync(path.join(extension, "manifest.json"), "utf8"));
+  if (
+    chromeManifest.version !== extensionManifest.extensionVersion ||
+    chromeManifest.version_name !== extensionManifest.productExtensionVersion
+  ) {
+    throw new Error("Packaged Chrome extension version mismatch");
+  }
+  const popup = `${fs.readFileSync(path.join(extension, "popup.js"), "utf8")}\n${fs.readFileSync(
+    path.join(extension, "popup.html"),
+    "utf8",
+  )}`;
+  if (/cookie|clipboard/i.test(popup)) throw new Error("Packaged Chrome popup security patch is missing");
+}
+
+function verifyTestAndroidAssets(resources, platform, arch, executeTools) {
+  const androidRoot = path.join(resources, "test-android");
+  if (platform !== "win32") {
+    if (fs.existsSync(androidRoot)) throw new Error("Android test assets must only ship in Windows x64 packages");
+    return;
+  }
+  if (arch !== "x64") throw new Error("Android test assets require Windows x64");
+  assertExact(fs.readdirSync(androidRoot).sort(), ["win32-x64"], "Android test target directories");
+  const targetRoot = path.join(androidRoot, "win32-x64");
+  const manifest = JSON.parse(fs.readFileSync(path.join(targetRoot, "manifest.json"), "utf8"));
+  const windowsTools = manifest.platformTools?.windowsX64;
+  if (
+    manifest.schemaVersion !== 1 ||
+    manifest.platform !== "win32" ||
+    manifest.arch !== "x64" ||
+    manifest.handsetsVersion !== "0.1.38" ||
+    manifest.sourceCommit !== "dbf8fe0484a566695cfdfaf952e41f700e6850ed" ||
+    manifest.sourceArchiveSha256 !== "710e662d12fda5a5f3c43462abb08907ccd51235145ca66152af193e7460ac0d" ||
+    manifest.platformTools?.version !== "37.0.1" ||
+    windowsTools?.productPath !== "tools/windows-x64/platform-tools-37.0.1.zip" ||
+    windowsTools?.bytes !== 8_044_989 ||
+    windowsTools?.sha256 !== "45f4d63113e895ebde0c90f194099a4676b6ac653bd28d54314a9e022bbc1a99" ||
+    !Array.isArray(manifest.files)
+  ) {
+    throw new Error("Packaged Android test asset manifest does not match the fixed product baseline");
+  }
+  const expectedFiles = ["LICENSE", "VERSION", "hs.exe", "hs.jar"];
+  assertExact(
+    fs.readdirSync(targetRoot).sort(),
+    [...expectedFiles, "manifest.json"].sort(),
+    "Android test asset files",
+  );
+  assertExact(manifest.files.map((file) => file.path).sort(), expectedFiles.sort(), "Android test manifest files");
+  for (const file of manifest.files) {
+    if (!safeRelativePath(file.path) || file.path.includes("/")) {
+      throw new Error("Unsafe Android test asset manifest path");
+    }
+    verifyManifestFile(path.join(targetRoot, file.path), file.sha256, file.bytes);
+  }
+  if (fs.readFileSync(path.join(targetRoot, "VERSION"), "utf8").trim() !== "v0.1.38") {
+    throw new Error("Packaged Handsets version mismatch");
+  }
+  if (executeTools) {
+    const result = spawnSync(path.join(targetRoot, "hs.exe"), ["--help"], {
+      encoding: "utf8",
+      timeout: 10_000,
+      windowsHide: true,
+      env: { ...process.env, HANDSETS_JAR: path.join(targetRoot, "hs.jar") },
+    });
+    if (result.status !== 0 || !result.stdout.includes("Usage: hs")) {
+      throw new Error(`Packaged Handsets failed: ${result.stderr || result.stdout}`);
+    }
+  }
 }
 
 function verifyPiRuntimeAssets(resources, platform, arch) {
@@ -323,7 +445,13 @@ function runPackagedStartup(executable, toolTarget, environmentPatch = {}, extra
       report.rendererReady !== true ||
       report.hostReady !== true ||
       report.piVersion !== expectedPiVersion ||
-      report.hostAckRevision !== report.revision
+      report.hostAckRevision !== report.revision ||
+      report.testBrowserCliVersion !== "0.3.7" ||
+      !/^2\.1-pi-test\.\d+$/.test(report.testBrowserExtensionVersion) ||
+      report.testAndroidSupported !== (expectedPlatform === "win32") ||
+      report.testHandsetsVersion !== "0.1.38" ||
+      report.testPlatformToolsVersion !== "37.0.1" ||
+      report.testPlatformToolsInstalled !== false
     ) {
       throw new Error(`Invalid packaged startup report: ${JSON.stringify(report)}`);
     }

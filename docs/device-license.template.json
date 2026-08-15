@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "licenseId": "lic-YYYYMMDD-001",
+  "deviceFingerprint": "<应用授权详情中复制的64位小写设备标识>",
+  "status": "active",
+  "issuedAt": "YYYY-MM-DDTHH:mm:ssZ",
+  "features": ["desktop-testing"],
+  "minimumDesktopVersion": "0.1.7",
+  "signature": "<必须由scripts/issue-device-license.mjs生成，不能手工填写>"
+}

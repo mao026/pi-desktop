@@ -1,0 +1,41 @@
+schemaVersion: 1
+id: order-then-admin
+title: H5 下单后管理后台核对
+surface: h5
+status: draft
+tags: [order, admin]
+risk: high
+createdAt: 2026-08-11T08:00:00Z
+updatedAt: 2026-08-11T08:00:00Z
+
+pre:
+  - surface: h5
+    open: "{{surfaces.h5.url}}"
+
+steps:
+  - act: tap
+    target: "立即下单"
+  - act: wait
+    text: "下单成功"
+  - act: shot
+    name: h5-ordered
+  - act: open
+    surface: admin
+    url: "{{surfaces.admin.url}}"
+  - act: fill
+    surface: admin
+    target: "订单号"
+    value: "{{input.order_id}}"
+  - act: tap
+    surface: admin
+    target: "查询"
+  - act: wait
+    surface: admin
+    text: "已支付"
+  - act: shot
+    surface: admin
+    name: admin-order
+
+assert:
+  - surface: admin
+    see: "已支付"

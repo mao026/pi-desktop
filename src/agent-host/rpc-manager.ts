@@ -8,23 +8,23 @@ import {
   type AgentSessionRuntimeDiagnostic,
 } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "crypto";
+import path from "node:path";
 import { cacheSessionPath } from "./session-reader";
 import type { SlashCommandInfo } from "@earendil-works/pi-coding-agent";
 import type { AgentSessionLike, ExtensionUiContextLike, ToolInfo } from "../shared/pi-types";
-import type { ChannelId } from "../shared/channel-types";
 import type { ExtensionUiRequest, ExtensionUiResponse, ExtensionWidgetItem } from "../shared/types";
 import { toolchainRuntime } from "./toolchain-runtime";
 import { createToolchainBashOptions } from "./toolchain-bash";
 import { createDesktopSearchToolDefinitions } from "./toolchain-search";
-import {
-  browserToolNamesForSnapshot,
-  createBrowserToolDefinitions,
-  isBrowserToolName,
-  setBrowserSessionSource,
-} from "./browser-tools";
-import { browserCapabilityRuntime } from "./browser-capability-runtime";
-import { browserAgentRuntime } from "./browser-agent-runtime";
 import { projectExtensionDiagnostics } from "./extension-diagnostics";
+import { callMain } from "./parent-rpc";
+import {
+  createTestExtension,
+  createTypedTestHostCall,
+  TEST_TOOL_NAMES,
+  type TestVisualAnalyzer,
+} from "../../packages/pi-test/extension/index.ts";
+import { analyzeVisualScreenshot } from "./visual-model";
 
 // ============================================================================
 // Types
@@ -75,7 +75,14 @@ type ExtensionBindingOptions = {
   forceEmptySystemPrompt?: boolean;
 };
 
-export type ExternalSessionCommand = "compact" | "reload";
+export type AgentSessionMode = "general" | "test";
+
+const PI_TEST_SESSION_MARKER = "pi-test-session";
+const PI_TEST_SYSTEM_PROMPT = [
+  "你是 Pi 专用测试工作台中的测试 Agent。",
+  "只使用固定 test_setup、test_run、test_observe、test_act、test_map、test_case、test_play 和 test_finding 工具；不得使用 Bash、任意文件工具、Git、Electron Browser 或第三方资源。",
+  "所有现场操作由 Main Test Coordinator 统一执行，并遵守 readiness、全局租约、生产只读和风险确认门禁。",
+].join("\n");
 
 const CODING_TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 const LEGACY_CHANNEL_PROMPT = /^\[外部消息来源：(微信|Telegram|飞书 \/ Lark)\]\n/;
@@ -118,7 +125,7 @@ function withExtensionTools(session: AgentSessionLike, toolNames: string[]): str
   const extensionToolNames = session
     .getAllTools()
     .map((t) => t.name)
-    .filter((name) => !codingToolNames.has(name) && !isBrowserToolName(name));
+    .filter((name) => !codingToolNames.has(name));
 
   return [...new Set([...toolNames, ...extensionToolNames])];
 }
@@ -145,9 +152,6 @@ export class AgentSessionWrapper {
   private promptRunning = false;
   private queuedTurnCount = 0;
   private turnTail: Promise<void> = Promise.resolve();
-  private externalTurnActive = false;
-  private externalTurnChannel: ChannelId | null = null;
-  private externalTurnProgress: ((event: AgentEvent) => void) | null = null;
   private extensionsBound = false;
   private extensionBindingPromise: Promise<void> | null = null;
   private extensionBindingError: unknown = null;
@@ -158,7 +162,10 @@ export class AgentSessionWrapper {
   private onDestroyCallback: (() => void) | null = null;
   private _alive = true;
 
-  constructor(inner: AgentSessionLike) {
+  constructor(
+    inner: AgentSessionLike,
+    public readonly sessionMode: AgentSessionMode = "general",
+  ) {
     this.inner = inner;
     const messages = this.inner.agent.state?.messages;
     if (Array.isArray(messages)) this.inner.agent.state!.messages = stripLegacyChannelPrompts(messages);
@@ -191,13 +198,7 @@ export class AgentSessionWrapper {
   start(): void {
     this.unsubscribe = this.inner.subscribe((event: AgentEvent) => {
       this.resetIdleTimer();
-      const displayEvent = this.withExternalChannelSource(event);
-      this.emit(displayEvent);
-      try {
-        this.externalTurnProgress?.(displayEvent);
-      } catch {
-        // Channel progress is best-effort and must never interrupt the Agent.
-      }
+      this.emit(event);
       // Streaming / compaction / tool events flow through here; re-broadcast
       // the running-status snapshot so the sidebar can update live.
       notifyRunningChange();
@@ -207,19 +208,9 @@ export class AgentSessionWrapper {
   }
 
   syncBrowserToolActivation(): void {
-    const current = this.inner.getActiveToolNames().filter((name) => !isBrowserToolName(name));
-    const browserTools = browserToolNamesForSnapshot(browserCapabilityRuntime.getSnapshot());
-    this.inner.setActiveToolsByName([...new Set([...current, ...browserTools])]);
-  }
-
-  private withExternalChannelSource(event: AgentEvent): AgentEvent {
-    if (!this.externalTurnChannel || (event.type !== "message_start" && event.type !== "message_end")) return event;
-    const message = event.message;
-    if (!message || typeof message !== "object" || (message as { role?: unknown }).role !== "user") return event;
-    return {
-      ...event,
-      message: { ...(message as Record<string, unknown>), channelSource: this.externalTurnChannel },
-    };
+    if (this.sessionMode === "test") {
+      this.inner.setActiveToolsByName([...TEST_TOOL_NAMES]);
+    }
   }
 
   setForceEmptySystemPrompt(force: boolean): void {
@@ -373,65 +364,6 @@ export class AgentSessionWrapper {
     return run;
   }
 
-  async runExternalTurn(params: {
-    runId: string;
-    message: string;
-    channel: ChannelId;
-    images?: Array<{ type: "image"; data: string; mimeType: string }>;
-    attachmentContext?: string;
-    onProgress?: (event: AgentEvent) => void;
-  }): Promise<{ runId: string; finalText: string }> {
-    return this.enqueueTurn(async () => {
-      this.emit({ type: "channel_turn_start", runId: params.runId });
-      this.externalTurnActive = true;
-      this.externalTurnChannel = params.channel;
-      setBrowserSessionSource(this.inner.sessionManager, "channel");
-      browserAgentRuntime.beginTurn(this.sessionId, "channel");
-      this.externalTurnProgress = params.onProgress ?? null;
-      try {
-        this.inner.sessionManager.appendCustomEntry("pi-desktop-channel-source", {
-          runId: params.runId,
-          channel: params.channel,
-        });
-        if (params.attachmentContext) {
-          await this.inner.sendCustomMessage(
-            {
-              customType: "pi-desktop-channel-attachment-context",
-              content: params.attachmentContext,
-              display: false,
-            },
-            { deliverAs: "nextTurn" },
-          );
-        }
-        await this.inner.prompt(params.message, {
-          ...(params.images?.length ? { images: params.images } : {}),
-          expandPromptTemplates: false,
-          source: "rpc",
-        });
-        const finalText = this.inner.getLastAssistantText()?.trim() ?? "";
-        this.emit({ type: "channel_turn_end", runId: params.runId, finalText });
-        return { runId: params.runId, finalText };
-      } catch (error) {
-        try {
-          this.inner.sessionManager.appendCustomEntry("pi-desktop-channel-source-cancelled", { runId: params.runId });
-        } catch {
-          // A best-effort UI marker must never hide the original turn failure.
-        }
-        this.emit({
-          type: "channel_turn_error",
-          runId: params.runId,
-          errorMessage: error instanceof Error ? error.message : String(error),
-        });
-        throw error;
-      } finally {
-        this.externalTurnProgress = null;
-        this.externalTurnActive = false;
-        this.externalTurnChannel = null;
-        setBrowserSessionSource(this.inner.sessionManager, "local");
-      }
-    });
-  }
-
   private async reloadSessionResources(): Promise<void> {
     await this.waitForExtensionsBound();
     this.extensionStatuses.clear();
@@ -442,16 +374,6 @@ export class AgentSessionWrapper {
     }
     this.applyForcedEmptySystemPrompt();
     this.applyToolchainSummary();
-  }
-
-  async runExternalCommand(params: { command: ExternalSessionCommand; customInstructions?: string }): Promise<void> {
-    await this.enqueueTurn(async () => {
-      if (params.command === "compact") {
-        await this.inner.compact(params.customInstructions);
-        return;
-      }
-      await this.reloadSessionResources();
-    });
   }
 
   private resetIdleTimer(): void {
@@ -492,7 +414,6 @@ export class AgentSessionWrapper {
         // Fire and forget — events come via subscribe
         const promptImages = command.images as Array<{ type: "image"; data: string; mimeType: string }> | undefined;
         const streamingBehavior = command.streamingBehavior as "steer" | "followUp" | undefined;
-        if (!streamingBehavior) browserAgentRuntime.beginTurn(this.sessionId, "local");
         const invokePrompt = () =>
           this.inner.prompt(command.message as string, {
             ...(promptImages?.length ? { images: promptImages } : {}),
@@ -555,6 +476,7 @@ export class AgentSessionWrapper {
       }
 
       case "fork": {
+        if (this.sessionMode === "test") throw new Error("测试会话不允许分叉");
         const entryId = command.entryId as string;
         const sessionManager = this.inner.sessionManager;
         const currentSessionFile = this.inner.sessionFile;
@@ -760,7 +682,9 @@ export class AgentSessionWrapper {
   destroy(): void {
     if (!this._alive) return;
     this._alive = false;
-    browserAgentRuntime.clearSession(this.sessionId);
+    if (this.sessionMode === "test") {
+      void callMain("test.sessionEnded", { sessionId: this.sessionId }).catch(() => undefined);
+    }
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.unsubscribe?.();
     this.unsubscribe = null;
@@ -888,14 +812,6 @@ export class AgentSessionWrapper {
   }
 
   private requestExtensionCustomUi<T>(factory: unknown, options?: unknown): Promise<T> {
-    if (this.externalTurnActive) {
-      this.emit({
-        type: "channel_headless_ui_blocked",
-        feature: "custom",
-        errorMessage: "Interactive extension UI is unavailable for messaging-channel turns.",
-      });
-      return Promise.resolve(undefined as T);
-    }
     if (typeof factory !== "function") return Promise.resolve(undefined as T);
 
     const id = randomUUID();
@@ -949,14 +865,6 @@ export class AgentSessionWrapper {
     timeout?: number,
     signal?: AbortSignal,
   ): Promise<T> {
-    if (this.externalTurnActive) {
-      this.emit({
-        type: "channel_headless_ui_blocked",
-        feature: request.method,
-        errorMessage: "Interactive extension UI is unavailable for messaging-channel turns.",
-      });
-      return Promise.resolve(defaultValue);
-    }
     if (signal?.aborted) return Promise.resolve(defaultValue);
 
     const id = randomUUID();
@@ -1204,10 +1112,6 @@ export function getRpcSession(sessionId: string): AgentSessionWrapper | undefine
   return getRegistry().get(sessionId);
 }
 
-export function syncBrowserToolsForAllSessions(): void {
-  for (const session of getRegistry().values()) session.syncBrowserToolActivation();
-}
-
 export function getRunningRpcSessionIds(): string[] {
   const ids = new Set<string>();
   for (const [sessionId, session] of getRegistry()) {
@@ -1267,6 +1171,9 @@ export async function startRpcSession(
   sessionFile: string,
   cwd: string,
   toolNames?: string[],
+  requestedMode: AgentSessionMode = "general",
+  authorizeTestSession: (projectRoot: string) => Promise<unknown> = (projectRoot) =>
+    callMain("test.authorizeSession", { projectRoot }, 10_000),
 ): Promise<{ session: AgentSessionWrapper; realSessionId: string }> {
   const registry = getRegistry();
   const locks = getLocks();
@@ -1283,6 +1190,14 @@ export async function startRpcSession(
     const sessionManager = sessionFile
       ? SessionManager.open(sessionFile, undefined)
       : SessionManager.create(cwd, undefined);
+    const sessionMode: AgentSessionMode =
+      requestedMode === "test" ||
+      sessionManager
+        .getEntries()
+        .some((entry) => entry.type === "custom" && entry.customType === PI_TEST_SESSION_MARKER)
+        ? "test"
+        : "general";
+    if (sessionMode === "test") await authorizeTestSession(cwd);
 
     // Determine which tools to pass based on requested toolNames.
     // Since v0.68.0, session creation expects string[] tool names instead of Tool[] instances.
@@ -1300,44 +1215,80 @@ export async function startRpcSession(
 
     // Build services first so extension-registered providers are available
     // before the SDK restores the saved model from the session file.
-    const services = await createAgentSessionServices({ cwd, agentDir });
-    const executionContext = await toolchainRuntime.createExecutionContext({
+    const piTestRoot = path.resolve(import.meta.dirname, "../../packages/pi-test");
+    const services = await createAgentSessionServices({
       cwd,
-      intent: "agent-shell",
-      trusted: services.settingsManager.isProjectTrusted(),
+      agentDir,
+      ...(sessionMode === "test"
+        ? {
+            resourceLoaderOptions: {
+              noExtensions: true,
+              noSkills: true,
+              noPromptTemplates: true,
+              noThemes: true,
+              noContextFiles: true,
+              extensionFactories: [
+                {
+                  name: "pi-test",
+                  factory: createTestExtension(createTypedTestHostCall(callMain), ((input) =>
+                    analyzeVisualScreenshot(services.modelRuntime, input)) satisfies TestVisualAnalyzer),
+                },
+              ],
+              additionalSkillPaths: [path.join(piTestRoot, "workflows")],
+              systemPrompt: PI_TEST_SYSTEM_PROMPT,
+            },
+          }
+        : {}),
     });
-    const bashOptions = createToolchainBashOptions(
-      executionContext,
-      toolchainRuntime,
-      services.settingsManager.getShellCommandPrefix(),
-      (command) => browserAgentRuntime.guardBash(sessionManager.getSessionId(), command),
-    );
-    const customTools = [
-      createBashToolDefinition(cwd, bashOptions),
-      ...createDesktopSearchToolDefinitions(cwd, executionContext, toolchainRuntime),
-      ...createBrowserToolDefinitions(),
-    ] as unknown as NonNullable<CreateAgentSessionFromServicesOptions["customTools"]>;
+    const executionContext =
+      sessionMode === "test"
+        ? null
+        : await toolchainRuntime.createExecutionContext({
+            cwd,
+            intent: "agent-shell",
+            trusted: services.settingsManager.isProjectTrusted(),
+          });
+    const customTools =
+      sessionMode === "test"
+        ? []
+        : ([
+            createBashToolDefinition(
+              cwd,
+              createToolchainBashOptions(
+                executionContext!,
+                toolchainRuntime,
+                services.settingsManager.getShellCommandPrefix(),
+              ),
+            ),
+            ...createDesktopSearchToolDefinitions(cwd, executionContext!, toolchainRuntime),
+          ] as unknown as NonNullable<CreateAgentSessionFromServicesOptions["customTools"]>);
     const { session: inner } = await createAgentSessionFromServices({
       services,
       sessionManager,
-      ...(toolsOption !== undefined ? { tools: toolsOption } : {}),
+      ...(sessionMode === "test"
+        ? { tools: [...TEST_TOOL_NAMES], noTools: "builtin" as const }
+        : toolsOption !== undefined
+          ? { tools: toolsOption }
+          : {}),
       customTools,
     });
 
     // If specific tool names were requested (non-empty), set the active tools to the
     // requested builtin coding tools PLUS all extension/package tools, so installed
     // extensions stay usable in Pi Desktop just like in the `pi` CLI.
-    if (toolNames && toolNames.length > 0) {
+    if (sessionMode === "test") {
+      inner.setActiveToolsByName([...TEST_TOOL_NAMES]);
+    } else if (toolNames && toolNames.length > 0) {
       inner.setActiveToolsByName(withExtensionTools(inner, toolNames));
     }
 
-    const wrapper = new AgentSessionWrapper(inner);
+    const wrapper = new AgentSessionWrapper(inner, sessionMode);
     wrapper.setRuntimeDiagnostics(services.diagnostics);
-    wrapper.setToolchainSummary(executionContext.inventoryRevision, executionContext.summary);
+    if (executionContext) wrapper.setToolchainSummary(executionContext.inventoryRevision, executionContext.summary);
     // When all tools are disabled, clear the system prompt entirely.
     // pi's buildSystemPrompt always produces a non-empty prompt even with no tools;
     // keep this forced after extension resource discovery and reloads as well.
-    if (toolNames?.length === 0) {
+    if (sessionMode !== "test" && toolNames?.length === 0) {
       wrapper.setForceEmptySystemPrompt(true);
     }
     wrapper.start();
@@ -1345,11 +1296,13 @@ export async function startRpcSession(
 
     const realSessionId = inner.sessionId as string;
     const realSessionFile = inner.sessionFile as string | undefined;
+    if (!sessionFile && sessionMode === "test")
+      inner.sessionManager.appendCustomEntry(PI_TEST_SESSION_MARKER, { version: 1 });
     if (realSessionFile) cacheSessionPath(realSessionId, realSessionFile);
 
     wrapper.onDestroy(() => registry.delete(realSessionId));
     registry.set(realSessionId, wrapper);
-    wrapper.beginExtensionBinding({ forceEmptySystemPrompt: toolNames?.length === 0 });
+    wrapper.beginExtensionBinding({ forceEmptySystemPrompt: sessionMode !== "test" && toolNames?.length === 0 });
 
     return { session: wrapper, realSessionId };
   })().finally(() => locks.delete(sessionId));

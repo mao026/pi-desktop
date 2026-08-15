@@ -6,9 +6,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readdirSync,
   readFileSync,
-  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -18,13 +16,11 @@ import {
 import { homedir, tmpdir } from "os";
 import path from "path";
 import {
-  DefaultResourceLoader,
   CredentialSynchronizationError,
   ModelRuntime,
   SessionManager,
   createAgentSessionServices,
   getAgentDir,
-  parseFrontmatter,
   type SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels, type AuthInteraction } from "@earendil-works/pi-ai";
@@ -40,7 +36,7 @@ import {
   type SessionRuntimeState,
 } from "../contract/types";
 import type { SessionTreeNode } from "../shared/types";
-import { allowFileRoot, getAllowedFileRoots, invalidateAllowedRootsCache, isFilePathAllowed } from "./file-access";
+import { allowFileRoot, invalidateAllowedRootsCache } from "./file-access";
 import { getRpcSession, getRunningRpcSessionIds, startRpcSession, subscribeRunningSessions } from "./rpc-manager";
 import {
   buildSessionContext,
@@ -50,35 +46,9 @@ import {
   listAllSessions,
   resolveSessionPath,
 } from "./session-reader";
-import { isFilePathReferencedBySession } from "./session-file-references";
-import {
-  addWorktree,
-  getGitStatus,
-  isDirtyWorktreeError,
-  listGitFiles,
-  listWorktrees,
-  removeWorktree,
-  resolveProject,
-} from "../shared/worktree";
-import { buildEntriesFromFiles, filterFileEntries } from "../shared/file-fuzzy";
-import {
-  DOCX_PREVIEW_MAX_BYTES,
-  IMAGE_PREVIEW_MAX_BYTES,
-  TEXT_PREVIEW_MAX_BYTES,
-  documentPreviewKind,
-  getAudioMime,
-  getDocumentMime,
-  getImageMime,
-} from "../shared/file-types";
-import { createFileWatchService } from "./file-watch";
-import { callMain } from "./parent-rpc";
 import { createAuthLoginService, resolveLoginCode } from "./auth-login";
 import { getSharedModelRuntime, modelCatalogRefreshCoordinator, reloadSharedModelRuntimeConfig } from "./model-runtime";
-import { applyPluginAction, readPlugins } from "./plugins-service";
-import { installSkill, searchSkills } from "./skills-service";
 import { projectSessionTreeForResponse } from "./project-tree";
-import { ChannelManager } from "./channels/channel-manager";
-import { ToolchainError } from "../shared/toolchains/errors";
 import { toolchainRuntime } from "./toolchain-runtime";
 import {
   logSessionPerformance,
@@ -97,70 +67,25 @@ import { getSessionContentSnapshot, invalidateSessionContent } from "./session-c
 import { sessionIndex } from "./session-index";
 import { credentialStateMatches, recoverCommittedCredential, type CredentialTarget } from "./credential-sync";
 
-const IGNORED_NAMES = new Set([
-  "node_modules",
-  ".git",
-  ".next",
-  "dist",
-  "build",
-  "__pycache__",
-  ".turbo",
-  ".cache",
-  "coverage",
-  ".pytest_cache",
-  ".mypy_cache",
-  "target",
-  "vendor",
-  ".DS_Store",
-]);
-
-const EXT_TO_LANGUAGE: Record<string, string> = {
-  ts: "typescript",
-  tsx: "typescript",
-  js: "javascript",
-  jsx: "javascript",
-  mjs: "javascript",
-  cjs: "javascript",
-  py: "python",
-  rb: "ruby",
-  go: "go",
-  rs: "rust",
-  java: "java",
-  kt: "kotlin",
-  swift: "swift",
-  c: "c",
-  cpp: "cpp",
-  h: "c",
-  hpp: "cpp",
-  cs: "csharp",
-  html: "html",
-  htm: "html",
-  css: "css",
-  scss: "css",
-  less: "css",
-  json: "json",
-  jsonl: "json",
-  yaml: "yaml",
-  yml: "yaml",
-  toml: "toml",
-  xml: "xml",
-  md: "markdown",
-  mdx: "markdown",
-  sh: "bash",
-  bash: "bash",
-  zsh: "bash",
-  fish: "bash",
-  sql: "sql",
-  txt: "text",
+const BINARY_MIME_BY_EXT: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  bmp: "image/bmp",
+  svg: "image/svg+xml",
+  mp3: "audio/mpeg",
+  wav: "audio/wav",
+  ogg: "audio/ogg",
+  m4a: "audio/mp4",
+  pdf: "application/pdf",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 };
 
-function getLanguage(filePath: string): string {
-  const base = path.basename(filePath).toLowerCase();
-  if (base === "dockerfile" || base.startsWith("dockerfile.")) return "dockerfile";
-  if (base === ".env" || base.startsWith(".env.")) return "bash";
-  if (base === "makefile" || base === "gnumakefile") return "makefile";
-  const ext = base.split(".").pop() ?? "";
-  return EXT_TO_LANGUAGE[ext] ?? "text";
+function binaryMimeForPath(filePath: string): string | null {
+  const ext = path.extname(filePath).slice(1).toLowerCase();
+  return BINARY_MIME_BY_EXT[ext] ?? null;
 }
 
 async function emitIndexedSessionChange(server: RpcServer, sessionId: string, cwd: string | null): Promise<void> {
@@ -175,13 +100,6 @@ async function emitIndexedSessionChange(server: RpcServer, sessionId: string, cw
     console.error("[agent-host] failed to refresh changed session:", error);
   }
   server.emit("sessions.changed", "*", { cwd, fullRefresh: true });
-}
-
-async function assertPathAllowed(target: string, sourceSessionId?: string): Promise<void> {
-  const allowed = await getAllowedFileRoots();
-  if (isFilePathAllowed(target, allowed)) return;
-  if (sourceSessionId && (await isFilePathReferencedBySession(target, sourceSessionId))) return;
-  throw new RpcError({ code: "FORBIDDEN", message: "Access denied" });
 }
 
 function getModelsPath(): string {
@@ -228,41 +146,6 @@ function writeModelsJson(data: Record<string, unknown>): void {
   }
 }
 
-async function resolveLoadedSkill(cwd: string, filePath: string) {
-  if (!cwd || !filePath) {
-    throw new RpcError({ code: "BAD_REQUEST", message: "cwd and filePath are required" });
-  }
-  const loader = new DefaultResourceLoader({ cwd, agentDir: getAgentDir() });
-  await loader.reload();
-  const requested = realpathSync(filePath);
-  const skill = loader.getSkills().skills.find((candidate) => {
-    try {
-      return realpathSync(candidate.filePath) === requested;
-    } catch {
-      return false;
-    }
-  });
-  if (!skill) {
-    throw new RpcError({ code: "FORBIDDEN", message: "Skill is not loaded for this project" });
-  }
-  return skill;
-}
-
-function writeTextAtomically(filePath: string, content: string): void {
-  const tmp = `${filePath}.${process.pid}.tmp`;
-  writeFileSync(tmp, content, "utf8");
-  try {
-    renameSync(tmp, filePath);
-  } catch (error) {
-    try {
-      unlinkSync(tmp);
-    } catch {
-      /* ignore cleanup failure */
-    }
-    throw error;
-  }
-}
-
 const THINKING_SUFFIXES = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
 
 function stripThinkingSuffix(modelRef: string): string {
@@ -283,12 +166,11 @@ function filterByExactEnabledModels<T extends { id: string; provider: string }>(
   return visible.length > 0 ? visible : available;
 }
 
-function projectModelPreferences<T extends { id: string; name: string; provider: string }>(
-  available: readonly T[],
-  enabledModels: string[] | undefined,
-): ModelPreferencesResult {
+function projectModelPreferences<
+  T extends { id: string; name: string; provider: string; input: readonly ("text" | "image")[] },
+>(available: readonly T[], enabledModels: string[] | undefined): ModelPreferencesResult {
   const models: ModelInfo[] = available
-    .map((model) => ({ id: model.id, name: model.name, provider: model.provider }))
+    .map((model) => ({ id: model.id, name: model.name, provider: model.provider, input: [...model.input] }))
     .sort((a, b) => a.name.localeCompare(b.name) || a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id));
   const normalized = [...new Set((enabledModels ?? []).map(stripThinkingSuffix).filter(Boolean))];
   return { models, enabledModels: normalized.length > 0 ? normalized : null };
@@ -368,7 +250,7 @@ async function projectModelsList(
   const enabledModels = settings.getEnabledModels();
   const visible = filterByExactEnabledModels(available, enabledModels);
   const models = visible
-    .map((model) => ({ id: model.id, name: model.name, provider: model.provider }))
+    .map((model) => ({ id: model.id, name: model.name, provider: model.provider, input: [...model.input] }))
     .sort((a, b) => a.name.localeCompare(b.name) || a.provider.localeCompare(b.provider));
 
   const nameMap: Record<string, string> = {};
@@ -392,12 +274,7 @@ async function projectModelsList(
 }
 
 export function registerHandlers(server: RpcServer): () => Promise<void> {
-  const fileWatch = createFileWatchService(server);
   const authLogin = createAuthLoginService(server);
-  const channelManager = new ChannelManager(server, (session, sessionId) =>
-    ensureSessionEvents(server, session, sessionId),
-  );
-  void channelManager.initialize();
 
   // Running sessions stream + tray badge signal to main via parentPort
   subscribeRunningSessions((ids) => {
@@ -665,7 +542,6 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
       invalidateSessionContent(filePath);
       const deletedSession = sessionIndex.removePath(filePath);
       invalidateSessionPathCache(id);
-      void callMain("browser.sessionEnded", { sessionId: id }).catch(() => undefined);
       server.emit("sessions.changed", id, {
         cwd: deletedSession?.cwd ?? null,
         sessionId: id,
@@ -694,69 +570,6 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
       return { ok: true as const };
     },
 
-    "worktrees.list": async (params) => {
-      const { projectRoot } = params as { projectRoot: string };
-      const allowed = await getAllowedFileRoots();
-      if (!isFilePathAllowed(projectRoot, allowed)) {
-        throw new RpcError({ code: "FORBIDDEN", message: "Access denied" });
-      }
-      const project = await resolveProject(projectRoot);
-      let worktrees: Awaited<ReturnType<typeof listWorktrees>> = [];
-      let isGit = true;
-      try {
-        worktrees = await listWorktrees(existsSync(projectRoot) ? projectRoot : project.projectRoot);
-      } catch {
-        isGit = false;
-      }
-      for (const w of worktrees) allowFileRoot(w.path);
-      return {
-        worktrees,
-        projectRoot: project.projectRoot,
-        isGit,
-        isTopLevel: project.isTopLevel,
-      };
-    },
-
-    "worktrees.create": async (params) => {
-      const body = params as { projectRoot: string; branch: string; cwd?: string };
-      const cwd = body.cwd ?? body.projectRoot;
-      const allowed = await getAllowedFileRoots();
-      if (!isFilePathAllowed(cwd, allowed)) {
-        throw new RpcError({ code: "FORBIDDEN", message: "Access denied" });
-      }
-      const result = await addWorktree(cwd, body.branch);
-      allowFileRoot(result.path);
-      return { worktree: result };
-    },
-
-    "worktrees.remove": async (params) => {
-      const body = params as { path: string; cwd?: string; force?: boolean };
-      const cwd = body.cwd ?? body.path;
-      const allowed = await getAllowedFileRoots();
-      if (!isFilePathAllowed(cwd, allowed)) {
-        throw new RpcError({ code: "FORBIDDEN", message: "Access denied" });
-      }
-      try {
-        await removeWorktree(cwd, body.path, body.force === true);
-      } catch (error) {
-        if (!body.force && isDirtyWorktreeError(error)) {
-          throw new RpcError({
-            code: "CONFLICT",
-            message: error instanceof Error ? error.message : String(error),
-            detail: { dirty: true },
-          });
-        }
-        throw error;
-      }
-      return { ok: true as const };
-    },
-
-    "git.status": async (params) => {
-      const { path: cwd } = params as { path: string };
-      await assertPathAllowed(cwd);
-      return getGitStatus(cwd);
-    },
-
     "agent.new": async (params) => {
       const body = params as {
         cwd: string;
@@ -766,9 +579,10 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
         modelId?: string;
         toolNames?: string[];
         thinkingLevel?: string;
+        sessionMode?: "general" | "test";
         [key: string]: unknown;
       };
-      const { cwd, provider, modelId, toolNames, thinkingLevel, ...rest } = body;
+      const { cwd, provider, modelId, toolNames, thinkingLevel, sessionMode = "general", ...rest } = body;
       if (!cwd || typeof cwd !== "string") {
         throw new RpcError({ code: "BAD_REQUEST", message: "cwd is required" });
       }
@@ -776,8 +590,11 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
         throw new RpcError({ code: "BAD_REQUEST", message: `Directory does not exist: ${cwd}` });
       }
 
+      if (sessionMode !== "general" && sessionMode !== "test") {
+        throw new RpcError({ code: "BAD_REQUEST", message: "sessionMode must be general or test" });
+      }
       const tempKey = `__new__${Date.now()}`;
-      const { session, realSessionId } = await startRpcSession(tempKey, "", cwd, toolNames);
+      const { session, realSessionId } = await startRpcSession(tempKey, "", cwd, toolNames, sessionMode);
       allowFileRoot(cwd);
 
       // ISSUE-003: single event-binding entry only (ensureSessionEvents)
@@ -791,6 +608,7 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
       }
 
       if (rest.type === "ensure_session") {
+        await emitIndexedSessionChange(server, realSessionId, cwd);
         return { sessionId: realSessionId, data: null };
       }
 
@@ -823,315 +641,46 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
       const { sessionId } = params as { sessionId: string };
       const session = getRpcSession(sessionId);
       if (!session || !session.isAlive()) return { running: false };
-      const state = await session.send({ type: "get_state" });
+      const state = (await session.send({ type: "get_state" })) as SessionRuntimeState;
       return { running: true, state };
     },
 
-    "channels.list": async () => channelManager.snapshot(),
-
-    "channels.accountUpsert": async (params) => channelManager.upsertAccount(params.account),
-
-    "channels.accountConnect": async (params) => channelManager.connectAccount(params.account),
-
-    "channels.accountDelete": async (params) => channelManager.deleteAccount(params.accountId),
-
-    "channels.start": async (params) => {
-      await channelManager.startAccount(params.accountId);
-      return { ok: true as const };
-    },
-
-    "channels.stop": async (params) => {
-      await channelManager.stopAccount(params.accountId);
-      return { ok: true as const };
-    },
-
-    "channels.restart": async (params) => {
-      await channelManager.restartAccount(params.accountId);
-      return { ok: true as const };
-    },
-
-    "channels.probe": async (params) => channelManager.probe(params.accountId),
-
-    "channels.loginStart": async (params) => channelManager.startLogin(params),
-
-    "channels.loginWait": async (params) => channelManager.waitLogin(params.channel, params.sessionKey),
-
-    "channels.loginSubmitCode": async (params) => {
-      channelManager.submitLoginCode(params.channel, params.sessionKey, params.code);
-      return { ok: true as const };
-    },
-
-    "channels.loginCancel": async (params) => {
-      channelManager.cancelLogin(params.channel, params.sessionKey);
-      return { ok: true as const };
-    },
-
-    "channels.pairingApprove": async (params) => channelManager.approvePairing(params.pairingId),
-
-    "channels.pairingReject": async (params) => channelManager.rejectPairing(params.pairingId),
-
-    "channels.bindingUpsert": async (params) => channelManager.upsertBinding(params.binding),
-
-    "channels.bindingDelete": async (params) => channelManager.deleteBinding(params.bindingId),
-
-    "channels.testSend": async (params) => channelManager.testSend(params.accountId, params.peerId, params.message),
-
-    "files.list": async (params) => {
-      const { path: dirPath } = params as { path: string };
-      await assertPathAllowed(dirPath);
-      if (!existsSync(dirPath) || !statSync(dirPath).isDirectory()) {
-        throw new RpcError({ code: "NOT_FOUND", message: "Directory not found" });
-      }
-      const names = readdirSync(dirPath);
-      const entries: Array<{
-        name: string;
-        isDir: boolean;
-        size?: number;
-        mtime?: number;
-        path: string;
-        type: "file" | "directory";
-      }> = [];
-      for (const name of names) {
-        if (IGNORED_NAMES.has(name)) continue;
-        const full = path.join(dirPath, name);
-        try {
-          const st = statSync(full);
-          const isDir = st.isDirectory();
-          entries.push({
-            name,
-            path: full,
-            isDir,
-            type: isDir ? "directory" : "file",
-            size: st.size,
-            mtime: st.mtimeMs,
-          });
-        } catch {
-          /* skip unreadable */
-        }
-      }
-      entries.sort((a, b) => {
-        if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
-        return a.name.localeCompare(b.name);
-      });
-      return { entries: entries as never };
-    },
-
     "files.read": async (params) => {
-      const { path: filePath, sourceSessionId } = params as {
-        path: string;
-        sourceSessionId?: string;
-      };
-      await assertPathAllowed(filePath, sourceSessionId);
+      const { path: filePath } = params as { path: string; sourceSessionId?: string };
+      if (/\0/.test(filePath)) throw new RpcError({ code: "BAD_REQUEST", message: "Invalid path" });
       const st = statSync(filePath);
-      if (!st.isFile()) {
-        throw new RpcError({ code: "BAD_REQUEST", message: "Not a file" });
-      }
-
-      const imageMime = getImageMime(filePath);
-      const audioMime = getAudioMime(filePath);
-      const documentMime = getDocumentMime(filePath);
-      const binaryMime = imageMime || audioMime || documentMime;
-
-      // ISSUE-004: binary as base64+mime; never UTF-8 corrupt
-      if (binaryMime) {
-        const limit = imageMime ? IMAGE_PREVIEW_MAX_BYTES : documentMime ? DOCX_PREVIEW_MAX_BYTES : 50 * 1024 * 1024;
-        if (st.size > limit) {
-          return {
-            content: "",
-            encoding: "too_large" as const,
-            mime: binaryMime,
-            language: getLanguage(filePath),
-            size: st.size,
-            truncated: true,
-          };
+      if (!st.isFile()) throw new RpcError({ code: "BAD_REQUEST", message: "Not a file" });
+      const mime = binaryMimeForPath(filePath);
+      if (mime) {
+        if (st.size > 50 * 1024 * 1024) {
+          return { content: "", encoding: "too_large" as const, mime, size: st.size, truncated: true };
         }
         return {
           content: readFileSync(filePath).toString("base64"),
           encoding: "base64" as const,
-          mime: binaryMime,
-          language: getLanguage(filePath),
+          mime,
           size: st.size,
           truncated: false,
         };
       }
-
-      // Text: only read up to limit
-      const fd = await import("fs").then((fs) => fs.openSync(filePath, "r"));
-      try {
-        const max = Math.min(st.size, TEXT_PREVIEW_MAX_BYTES);
-        const buf = Buffer.alloc(max);
-        const n = (await import("fs")).readSync(fd, buf, 0, max, 0);
-        return {
-          content: buf.slice(0, n).toString("utf8"),
-          encoding: "utf8" as const,
-          language: getLanguage(filePath),
-          size: st.size,
-          truncated: st.size > TEXT_PREVIEW_MAX_BYTES,
-        };
-      } finally {
-        (await import("fs")).closeSync(fd);
-      }
+      const max = Math.min(st.size, 1024 * 1024);
+      return {
+        content: readFileSync(filePath, "utf8").slice(0, max),
+        encoding: "utf8" as const,
+        size: st.size,
+        truncated: st.size > max,
+      };
     },
 
     "files.download": async (params) => {
-      const { path: filePath, sourceSessionId } = params as {
-        path: string;
-        sourceSessionId?: string;
-      };
-      await assertPathAllowed(filePath, sourceSessionId);
+      const { path: filePath } = params as { path: string; sourceSessionId?: string };
+      if (/\0/.test(filePath)) throw new RpcError({ code: "BAD_REQUEST", message: "Invalid path" });
       const st = statSync(filePath);
-      if (!st.isFile()) {
-        throw new RpcError({ code: "BAD_REQUEST", message: "Not a file" });
-      }
+      if (!st.isFile()) throw new RpcError({ code: "BAD_REQUEST", message: "Not a file" });
       return {
         base64: readFileSync(filePath).toString("base64"),
         size: st.size,
-        mime:
-          getImageMime(filePath) || getAudioMime(filePath) || getDocumentMime(filePath) || "application/octet-stream",
-      };
-    },
-
-    "files.meta": async (params) => {
-      const { path: filePath, sourceSessionId } = params as {
-        path: string;
-        sourceSessionId?: string;
-      };
-      await assertPathAllowed(filePath, sourceSessionId);
-      const st = statSync(filePath);
-      const imageMime = getImageMime(filePath);
-      const audioMime = getAudioMime(filePath);
-      const documentMime = getDocumentMime(filePath);
-      return {
-        size: st.size,
-        mtime: st.mtimeMs,
-        language: getLanguage(filePath),
-        kind: documentPreviewKind(filePath) ?? (imageMime ? "image" : "file"),
-        mime: imageMime ?? audioMime ?? documentMime ?? "text/plain",
-      };
-    },
-
-    "files.preview": async (params) => {
-      const { path: filePath, sourceSessionId } = params as {
-        path: string;
-        sourceSessionId?: string;
-      };
-      await assertPathAllowed(filePath, sourceSessionId);
-      const st = statSync(filePath);
-      const imgMime = getImageMime(filePath);
-      if (imgMime) {
-        if (st.size > IMAGE_PREVIEW_MAX_BYTES) {
-          return { kind: "too_large", mime: imgMime, size: st.size };
-        }
-        return {
-          kind: "image",
-          mime: imgMime,
-          base64: readFileSync(filePath).toString("base64"),
-        };
-      }
-      const docKind = documentPreviewKind(filePath);
-      if (docKind === "docx") {
-        if (st.size > DOCX_PREVIEW_MAX_BYTES) {
-          return { kind: "too_large", mime: getDocumentMime(filePath) ?? undefined, size: st.size };
-        }
-        return {
-          kind: "docx",
-          mime: getDocumentMime(filePath) ?? undefined,
-          base64: readFileSync(filePath).toString("base64"),
-        };
-      }
-      if (st.size > TEXT_PREVIEW_MAX_BYTES) {
-        return {
-          kind: "text",
-          content: readFileSync(filePath, "utf8").slice(0, TEXT_PREVIEW_MAX_BYTES),
-          language: getLanguage(filePath),
-          truncated: true,
-        };
-      }
-      return {
-        kind: "text",
-        content: readFileSync(filePath, "utf8"),
-        language: getLanguage(filePath),
-      };
-    },
-
-    "files.index": async (params) => {
-      // ISSUE-005: return relative POSIX paths + { files, truncated, matches }
-      const { root, query } = params as { root: string; query?: string };
-      await assertPathAllowed(root);
-      let relFiles: string[] = [];
-      let hardTruncated = false;
-
-      try {
-        const all = await listGitFiles(root);
-        if (all.length > 50_000) {
-          hardTruncated = true;
-          relFiles = all.slice(0, 50_000);
-        } else {
-          relFiles = all;
-        }
-      } catch {
-        const abs: string[] = [];
-        const walk = (dir: string, depth: number) => {
-          if (depth > 8 || abs.length >= 5000) {
-            if (abs.length >= 5000) hardTruncated = true;
-            return;
-          }
-          let names: string[];
-          try {
-            names = readdirSync(dir);
-          } catch {
-            return;
-          }
-          for (const name of names) {
-            if (IGNORED_NAMES.has(name) || name.startsWith(".")) continue;
-            const full = path.join(dir, name);
-            try {
-              const st = statSync(full);
-              if (st.isDirectory()) walk(full, depth + 1);
-              else abs.push(full);
-            } catch {
-              /* skip */
-            }
-            if (abs.length >= 5000) {
-              hardTruncated = true;
-              return;
-            }
-          }
-        };
-        walk(root, 0);
-        const rootNorm = root.replace(/\\/g, "/").replace(/\/$/, "");
-        relFiles = abs.map((f) => {
-          const n = f.replace(/\\/g, "/");
-          return n.startsWith(rootNorm + "/") ? n.slice(rootNorm.length + 1) : n;
-        });
-      }
-
-      const CLIENT_CAP = 5000;
-      const filesForClient = relFiles.slice(0, CLIENT_CAP);
-      const truncated = hardTruncated || relFiles.length > CLIENT_CAP;
-      const entries = buildEntriesFromFiles(filesForClient);
-
-      if (query?.trim()) {
-        const matches = filterFileEntries(entries, query.trim()).slice(0, 50);
-        return {
-          files: filesForClient,
-          truncated,
-          matches: matches.map((m) => ({
-            path: m.path,
-            isDir: m.isDir,
-            score: "score" in m ? Number((m as { score?: number }).score ?? 0) : 0,
-          })),
-        };
-      }
-
-      return {
-        files: filesForClient,
-        truncated,
-        matches: entries.slice(0, 100).map((m) => ({
-          path: m.path,
-          isDir: m.isDir,
-          score: 0,
-        })),
+        mime: binaryMimeForPath(filePath) || "application/octet-stream",
       };
     },
 
@@ -1446,98 +995,6 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
       return { ok: true as const };
     },
 
-    "skills.list": async (params) => {
-      const cwd = (params as { cwd?: string } | void)?.cwd;
-      if (!cwd) throw new RpcError({ code: "BAD_REQUEST", message: "cwd required" });
-      const loader = new DefaultResourceLoader({ cwd, agentDir: getAgentDir() });
-      await loader.reload();
-      const { skills, diagnostics } = loader.getSkills();
-      return { skills, diagnostics };
-    },
-
-    "skills.search": async (params) => {
-      const { query } = params as { query: string };
-      try {
-        return (await searchSkills(query)) as never;
-      } catch (e) {
-        if (e instanceof ToolchainError) throw e;
-        throw new RpcError({
-          code: "INTERNAL",
-          message: e instanceof Error ? e.message : String(e),
-        });
-      }
-    },
-
-    "skills.install": async (params) => {
-      try {
-        return await installSkill(params as { package: string; scope?: "global" | "project"; cwd?: string });
-      } catch (e) {
-        if (e instanceof ToolchainError) throw e;
-        throw new RpcError({
-          code: "INTERNAL",
-          message: e instanceof Error ? e.message : String(e),
-        });
-      }
-    },
-
-    "skills.set": async (params) => {
-      const body = params as {
-        cwd: string;
-        filePath: string;
-        disableModelInvocation?: boolean;
-        content?: string;
-      };
-      const skill = await resolveLoadedSkill(body.cwd, body.filePath);
-      const { filePath } = skill;
-      const content = body.content ?? readFileSync(filePath, "utf8");
-      if (content.length > 2 * 1024 * 1024) {
-        throw new RpcError({ code: "BAD_REQUEST", message: "Skill file is too large" });
-      }
-      const key = "disable-model-invocation";
-      const { frontmatter } = parseFrontmatter<Record<string, unknown>>(content);
-      const alreadySet = Boolean(frontmatter[key]);
-      let updated = content;
-      if (body.disableModelInvocation === true && !alreadySet) {
-        updated = content.replace(/^---\r?\n/, `---\n${key}: true\n`);
-        if (updated === content) updated = `---\n${key}: true\n---\n${content}`;
-      } else if (body.disableModelInvocation === false && alreadySet) {
-        updated = content.replace(new RegExp(`^${key}\\s*:.*\\r?\\n`, "m"), "");
-      }
-      writeTextAtomically(filePath, updated);
-      return { ok: true as const };
-    },
-
-    "skills.getContent": async (params) => {
-      const body = params as { cwd: string; filePath: string };
-      const skill = await resolveLoadedSkill(body.cwd, body.filePath);
-      return { content: readFileSync(skill.filePath, "utf8") };
-    },
-
-    "plugins.list": async (params) => {
-      const cwd = (params as { cwd?: string } | void)?.cwd;
-      if (!cwd) throw new RpcError({ code: "BAD_REQUEST", message: "cwd required" });
-      return readPlugins(cwd);
-    },
-
-    "plugins.set": async (params) => {
-      return applyPluginAction(params);
-    },
-
-    "files.watchStart": async (params) => {
-      const { path: filePath, sourceSessionId } = params as {
-        path: string;
-        sourceSessionId?: string;
-      };
-      await fileWatch.start(filePath, sourceSessionId);
-      return { ok: true as const };
-    },
-
-    "files.watchStop": async (params) => {
-      const { path: filePath } = params as { path: string };
-      fileWatch.stop(filePath);
-      return { ok: true as const };
-    },
-
     "system.home": () => ({ home: homedir() }),
 
     "system.validateCwd": async (params) => {
@@ -1577,7 +1034,6 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
 
   return async () => {
     modelCatalogRefreshCoordinator.cancelAll();
-    await channelManager.shutdown();
   };
 }
 

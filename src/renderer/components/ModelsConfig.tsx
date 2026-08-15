@@ -142,12 +142,14 @@ function ProviderDetail({
   onChange,
   onRename,
   onDelete,
+  modelSelection,
 }: {
   name: string;
   provider: ProviderEntry;
   onChange: (p: ProviderEntry) => void;
   onRename: (n: string) => void;
   onDelete: () => void;
+  modelSelection: ModelSelectionControl;
 }) {
   const { t } = useI18n();
   const [editingName, setEditingName] = useState(name);
@@ -234,6 +236,7 @@ function ProviderDetail({
           required
         />
       </Field>
+      <ManagedModelsControl providerId={name} {...modelSelection} />
     </div>
   );
 }
@@ -2280,6 +2283,13 @@ export function ModelsConfig({
           onChange={(p) => updateProvider(selection.name, p)}
           onRename={(n) => renameProvider(selection.name, n)}
           onDelete={() => deleteProvider(selection.name)}
+          modelSelection={{
+            preferences: modelPreferences,
+            loading: modelPreferencesLoading,
+            saving: modelPreferencesSaving,
+            error: modelPreferencesError,
+            onChange: updateModelPreferences,
+          }}
         />
       );
     }

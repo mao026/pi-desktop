@@ -7,19 +7,14 @@ import {
   call,
   deleteSession,
   exportSession,
-  fileIndex,
-  fileMeta,
   getHome,
   getSession,
   getSessionContext,
-  listFiles,
   listModels,
   listSessions,
-  listWorktrees,
   newAgent,
   readFile,
   renameSession,
-  subscribe,
   subscribeAgentEvents,
   subscribeAuthLogin,
   subscribeRunning,
@@ -193,66 +188,14 @@ export async function apiFetch(input: string | URL | Request, init?: RequestInit
       return jsonResponse({ ok: true });
     }
 
-    if (segs[0] === "skills" && segs.length === 1 && method === "GET") {
-      const cwd = u.searchParams.get("cwd") ?? undefined;
-      return jsonResponse(await call("skills.list", cwd ? { cwd } : undefined));
-    }
-    if (segs[0] === "skills" && segs.length === 1 && (method === "PATCH" || method === "POST")) {
-      const body = await parseBody(init);
-      return jsonResponse(
-        await call("skills.set", {
-          cwd: String(body.cwd ?? ""),
-          filePath: String(body.filePath ?? ""),
-          ...(typeof body.disableModelInvocation === "boolean"
-            ? { disableModelInvocation: body.disableModelInvocation }
-            : {}),
-          ...(typeof body.content === "string" ? { content: body.content } : {}),
-        }),
-      );
-    }
-    if (segs[0] === "skills" && segs[1] === "search" && method === "POST") {
-      const body = await parseBody(init);
-      return jsonResponse(await call("skills.search", { query: String(body.query ?? "") }));
-    }
-    if (segs[0] === "skills" && segs[1] === "install" && method === "POST") {
-      const body = await parseBody(init);
-      return jsonResponse(await call("skills.install", body as never));
-    }
-
-    if (segs[0] === "plugins" && method === "GET") {
-      const cwd = u.searchParams.get("cwd") ?? undefined;
-      return jsonResponse(await call("plugins.list", cwd ? { cwd } : undefined));
-    }
-    if (segs[0] === "plugins" && (method === "POST" || method === "PUT" || method === "PATCH")) {
-      const body = await parseBody(init);
-      const action = String(body.action ?? "");
-      if (!["install", "remove", "update", "disable", "enable"].includes(action)) {
-        return errorResponse("Invalid plugin action", 400);
-      }
-      return jsonResponse(
-        await call("plugins.set", {
-          action: action as "install" | "remove" | "update" | "disable" | "enable",
-          cwd: String(body.cwd ?? ""),
-          ...(typeof body.source === "string" ? { source: body.source } : {}),
-          ...(body.scope === "project" || body.scope === "global" ? { scope: body.scope } : {}),
-        }),
-      );
-    }
-
     if (segs[0] === "files") {
       const rawPath = "/" + segs.slice(1).map(decodeURIComponent).join("/");
       const filePath = rawPath.match(/^\/[A-Za-z]:\//) ? rawPath.slice(1) : rawPath;
-      const type = u.searchParams.get("type") ?? "list";
+      const type = u.searchParams.get("type") ?? "read";
       const sourceSessionId = u.searchParams.get("sessionId") ?? undefined;
-      if (type === "list") return jsonResponse(await listFiles(filePath));
       if (type === "read") {
         const content = await readFile(filePath, sourceSessionId);
-        // Image/binary may return base64 — FileViewer text path expects JSON
         return jsonResponse(content);
-      }
-      if (type === "meta") return jsonResponse(await fileMeta(filePath, sourceSessionId));
-      if (type === "preview") {
-        return jsonResponse(await call("files.preview", { path: filePath, sourceSessionId }));
       }
       if (type === "download") {
         const content = await call("files.download", { path: filePath, sourceSessionId });
@@ -264,43 +207,6 @@ export async function apiFetch(input: string | URL | Request, init?: RequestInit
           headers: { "Content-Type": content.mime },
         });
       }
-    }
-
-    if (segs[0] === "file-index" && method === "GET") {
-      // ISSUE-005: pass through Host contract { files, truncated, matches }
-      const root = u.searchParams.get("cwd") ?? u.searchParams.get("root") ?? "";
-      const query = u.searchParams.get("q") ?? undefined;
-      const result = await fileIndex(root, query);
-      return jsonResponse(result);
-    }
-
-    if (segs[0] === "worktrees" && method === "GET") {
-      const cwd = u.searchParams.get("cwd") ?? "";
-      return jsonResponse(await listWorktrees(cwd));
-    }
-    if (segs[0] === "worktrees" && method === "POST") {
-      const body = await parseBody(init);
-      const result = await call("worktrees.create", {
-        projectRoot: String(body.cwd ?? body.projectRoot ?? ""),
-        branch: String(body.branch ?? ""),
-        cwd: body.cwd as string | undefined,
-      });
-      // Preserve the legacy route shape consumed by SessionSidebar.
-      return jsonResponse(result.worktree);
-    }
-    if (segs[0] === "worktrees" && method === "DELETE") {
-      const body = await parseBody(init);
-      await call("worktrees.remove", {
-        path: String(body.path ?? ""),
-        cwd: body.cwd as string | undefined,
-        force: body.force as boolean | undefined,
-      });
-      return jsonResponse({ success: true });
-    }
-
-    if (segs[0] === "git-status" && method === "GET") {
-      const cwd = u.searchParams.get("cwd") ?? "";
-      return jsonResponse(await call("git.status", { path: cwd }));
     }
 
     if (segs[0] === "cwd" && segs[1] === "validate" && method === "POST") {
@@ -447,33 +353,9 @@ export class ApiEventSource {
       }
 
       if (segs[0] === "files") {
-        const rawPath = "/" + segs.slice(1).map(decodeURIComponent).join("/");
-        const filePath = rawPath.match(/^\/[A-Za-z]:\//) ? rawPath.slice(1) : rawPath;
-        const sourceSessionId = u.searchParams.get("sessionId") ?? undefined;
-        this.filePath = filePath;
-
-        this.unsub = await subscribe("files.changed", filePath, (ev) => {
-          if (this.closed || gen !== this.generation) return;
-          this.readyState = ApiEventSource.OPEN;
-          const eventName = ev.event ?? "change";
-          this.dispatchNamed(eventName, {
-            mtime: ev.mtime,
-            size: ev.size,
-            message: ev.message,
-            filePath: ev.path,
-          });
-        });
-        if (this.closed || gen !== this.generation) {
-          this.unsub?.();
-          return;
-        }
-        await call("files.watchStart", { path: filePath, sourceSessionId });
-        if (this.closed || gen !== this.generation) {
-          void call("files.watchStop", { path: filePath }).catch(() => {});
-          return;
-        }
-        this.readyState = ApiEventSource.OPEN;
-        this.onopen?.(new Event("open"));
+        // File change watching was removed with the desktop file explorer.
+        this.readyState = ApiEventSource.CLOSED;
+        this.onerror?.(new Event("error"));
         return;
       }
 
@@ -496,11 +378,7 @@ export class ApiEventSource {
     this.unsub?.();
     this.unsub = null;
     // ISSUE-008: cancel OAuth if this was a login stream — best-effort via URL parse is hard;
-    // ModelsConfig must call auth.loginCancel. Still stop file watches.
-    if (this.filePath) {
-      void call("files.watchStop", { path: this.filePath }).catch(() => {});
-      this.filePath = null;
-    }
+    // ModelsConfig must call auth.loginCancel.
   }
 
   addEventListener(type: string, cb: EventListenerOrEventListenerObject) {

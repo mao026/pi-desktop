@@ -8,6 +8,17 @@ dist/
 temp/
 .env
 .env.*
+license-ed25519-private.pem
 .artifacts/
 build/toolchains/.core-cache/
 build/toolchains/core/
+build/toolchains/native/
+build/.test-browser-cache/
+build/test-browser/
+build/chrome-extension/
+build/.test-android-cache/
+build/test-android/
+
+!.env.example
+
+.idea/

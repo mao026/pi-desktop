@@ -7,8 +7,7 @@ import fs from "fs";
 import path from "path";
 import { appendMainLog } from "./logger";
 import type { ToolchainSnapshot } from "../shared/toolchains/types";
-import type { BrowserCapabilitySnapshot } from "../contract/browser";
-import { BrowserError } from "./browser/browser-error";
+import { TestCoordinatorError } from "./test-coordinator";
 
 const CRASH_WINDOW_MS = 30_000;
 const MAX_RESTARTS = 2;
@@ -24,7 +23,6 @@ export type HostMessage =
   | { type: "running-sessions"; sessionIds: string[] }
   | { type: "agent-end"; sessionId: string; eventType?: string }
   | { type: "toolchain:ack"; revision: number }
-  | { type: "browser:ack"; revision: number }
   | { type: string; [key: string]: unknown };
 
 export class HostManager {
@@ -40,8 +38,6 @@ export class HostManager {
   private requestHandler: ((method: string, params: unknown) => Promise<unknown>) | null = null;
   private toolchainSnapshot: ToolchainSnapshot | null = null;
   private toolchainAckRevision = -1;
-  private browserCapabilitySnapshot: BrowserCapabilitySnapshot | null = null;
-  private browserAckRevision = -1;
   private piVersion: string | null = null;
 
   constructor(private readonly hostEntry: string) {}
@@ -77,15 +73,6 @@ export class HostManager {
     return this.toolchainAckRevision;
   }
 
-  setBrowserCapabilitySnapshot(snapshot: BrowserCapabilitySnapshot): void {
-    this.browserCapabilitySnapshot = structuredClone(snapshot);
-    if (this.child && this.status === "ready") this.postBrowserSnapshot("browser:changed");
-  }
-
-  getBrowserAckRevision(): number {
-    return this.browserAckRevision;
-  }
-
   start(): void {
     if (this.child) return;
     this.spawn();
@@ -93,7 +80,7 @@ export class HostManager {
 
   stop(): void {
     this.clearPing();
-    this.status = "stopped";
+    this.setStatus("stopped");
     if (this.child) {
       try {
         this.child.postMessage({ type: "shutdown" });
@@ -191,7 +178,6 @@ export class HostManager {
     // A replacement utility process must acknowledge both policy snapshots
     // itself; an acknowledgement from the previous Host is not transferable.
     this.toolchainAckRevision = -1;
-    this.browserAckRevision = -1;
     this.setStatus("starting");
 
     // utilityProcess.fork rejects undefined env values
@@ -234,7 +220,6 @@ export class HostManager {
         const restarted = this.wasReadyBeforeExit;
         this.wasReadyBeforeExit = false;
         this.postToolchainSnapshot("toolchain:init");
-        this.postBrowserSnapshot("browser:init");
         this.setStatus("ready");
         this.startPing();
         if (restarted) {
@@ -249,12 +234,6 @@ export class HostManager {
         if (Number.isSafeInteger(revision) && revision >= 0) {
           this.toolchainAckRevision = Math.max(this.toolchainAckRevision, revision);
           appendMainLog(`agent-host toolchain ack revision=${revision}`);
-        }
-      } else if (m?.type === "browser:ack") {
-        const revision = Number(m.revision);
-        if (Number.isSafeInteger(revision) && revision >= 0) {
-          this.browserAckRevision = Math.max(this.browserAckRevision, revision);
-          appendMainLog(`agent-host browser ack revision=${revision}`);
         }
       } else if (m?.type === "host-rpc") {
         const request = m as HostMessage & { id?: string; method?: string; params?: unknown };
@@ -277,8 +256,8 @@ export class HostManager {
                   id,
                   ok: false,
                   error:
-                    error instanceof BrowserError
-                      ? error.toJSON()
+                    error instanceof TestCoordinatorError
+                      ? { code: error.code, message: error.message }
                       : { message: error instanceof Error ? error.message : String(error) },
                 });
               } catch {
@@ -347,15 +326,6 @@ export class HostManager {
       this.child.postMessage({ type, snapshot: this.toolchainSnapshot });
     } catch (error) {
       appendMainLog(`toolchain snapshot delivery failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  private postBrowserSnapshot(type: "browser:init" | "browser:changed"): void {
-    if (!this.child || !this.browserCapabilitySnapshot) return;
-    try {
-      this.child.postMessage({ type, snapshot: this.browserCapabilitySnapshot });
-    } catch (error) {
-      appendMainLog(`browser snapshot delivery failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 

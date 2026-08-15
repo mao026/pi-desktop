@@ -55,19 +55,14 @@ async function captureHandlers() {
 
 test("registerHandlers exposes every contract method exactly once", async () => {
   const { handlers } = await captureHandlers();
-  assert.equal(Object.keys(handlers).length, 70);
+  assert.equal(Object.keys(handlers).length, 36);
   for (const method of [
     "host.ping",
     "host.toolchain",
     "sessions.list",
     "sessions.contextPage",
     "sessions.entryContent",
-    "worktrees.list",
-    "git.status",
     "agent.state",
-    "channels.list",
-    "channels.accountConnect",
-    "files.list",
     "files.download",
     "models.list",
     "models.refresh",
@@ -75,8 +70,6 @@ test("registerHandlers exposes every contract method exactly once", async () => 
     "models.preferences.get",
     "models.preferences.set",
     "auth.providers",
-    "skills.list",
-    "plugins.list",
     "system.allowRoot",
   ]) {
     assert.equal(typeof handlers[method], "function", `${method} must be registered`);
@@ -130,7 +123,7 @@ test("credential mutation failures distinguish committed state from an unverifie
   );
 });
 
-test("file, git, worktree, skill, plugin, and system handlers return contract-shaped results", async (t) => {
+test("file and system handlers return contract-shaped results", async (t) => {
   const base = mkdtempSync(path.join(tmpdir(), "pi-handler-test-"));
   t.after(() => rmSync(base, { recursive: true, force: true }));
   const project = path.join(base, "project");
@@ -142,12 +135,6 @@ test("file, git, worktree, skill, plugin, and system handlers return contract-sh
   assert.deepEqual(await handlers["system.allowRoot"]({ path: project }), { ok: true });
   assert.deepEqual(await handlers["system.validateCwd"]({ path: project }), { ok: true, path: project });
 
-  const listed = await handlers["files.list"]({ path: project });
-  assert.equal(
-    listed.entries.some((entry) => entry.name === "hello.txt" && entry.type === "file"),
-    true,
-  );
-
   const read = await handlers["files.read"]({ path: textFile });
   assert.equal(read.encoding, "utf8");
   assert.equal(read.content, "hello handler tests\n");
@@ -156,39 +143,11 @@ test("file, git, worktree, skill, plugin, and system handlers return contract-sh
   assert.equal(Buffer.from(downloaded.base64, "base64").toString("utf8"), "hello handler tests\n");
   assert.equal(downloaded.size, Buffer.byteLength("hello handler tests\n"));
 
-  const meta = await handlers["files.meta"]({ path: textFile });
-  assert.equal(meta.language, "text");
-  assert.equal(meta.mime, "text/plain");
-
-  const preview = await handlers["files.preview"]({ path: textFile });
-  assert.equal(preview.kind, "text");
-  assert.equal(preview.content, "hello handler tests\n");
-
-  const index = await handlers["files.index"]({ root: project, query: "hello" });
-  assert.equal(Array.isArray(index.files), true);
-  assert.equal(index.files.includes("hello.txt"), true);
-
-  const git = await handlers["git.status"]({ path: project });
-  assert.equal(git.isGit, false);
-
-  const worktrees = await handlers["worktrees.list"]({ projectRoot: project });
-  assert.equal(Array.isArray(worktrees.worktrees), true);
-  assert.equal(worktrees.projectRoot, project);
-
   const agentState = await handlers["agent.state"]({ sessionId: "missing-session" });
   assert.deepEqual(agentState, { running: false });
 
-  const skills = await handlers["skills.list"]({ cwd: project });
-  assert.equal(Array.isArray(skills.skills), true);
-
-  const plugins = await handlers["plugins.list"]({ cwd: project });
-  assert.equal(typeof plugins, "object");
-
   const running = await handlers["system.runningCount"]();
   assert.equal(running.count, running.sessionIds.length);
-
-  await handlers["files.watchStart"]({ path: project });
-  assert.deepEqual(await handlers["files.watchStop"]({ path: project }), { ok: true });
 });
 
 test("session, model configuration, and auth handlers isolate state and preserve error codes", async () => {

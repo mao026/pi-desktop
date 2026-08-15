@@ -1,22 +1,19 @@
 import { safeStorage } from "electron";
 import fs from "node:fs";
 import path from "node:path";
+import { validateCredentialKey } from "./credential-key.ts";
 
 type VaultFile = {
   version: 1;
   entries: Record<string, string>;
 };
 
-function validateKey(key: string): string {
-  const trimmed = key.trim();
-  if (!/^channel:(weixin|telegram|feishu):[a-z0-9._-]{1,160}$/i.test(trimmed)) {
-    throw new Error("Invalid channel credential key");
-  }
-  return trimmed;
-}
-
 export class CredentialVault {
-  constructor(private readonly filePath: string) {}
+  private readonly filePath: string;
+
+  constructor(filePath: string) {
+    this.filePath = filePath;
+  }
 
   private read(): VaultFile {
     try {
@@ -45,18 +42,22 @@ export class CredentialVault {
 
   private assertAvailable(): void {
     if (!safeStorage.isEncryptionAvailable()) {
-      throw new Error("OS credential encryption is unavailable; channel credentials were not persisted");
+      throw new Error("OS credential encryption is unavailable; credentials were not persisted");
     }
+  }
+
+  has(key: string): boolean {
+    this.assertAvailable();
+    return this.read().entries[validateCredentialKey(key)] !== undefined;
   }
 
   get(key: string): Record<string, unknown> | null {
     this.assertAvailable();
-    const encrypted = this.read().entries[validateKey(key)];
+    const encrypted = this.read().entries[validateCredentialKey(key)];
     if (!encrypted) return null;
     const plaintext = safeStorage.decryptString(Buffer.from(encrypted, "base64"));
     const parsed = JSON.parse(plaintext) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
-      throw new Error("Invalid channel credential payload");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Invalid credential payload");
     return parsed as Record<string, unknown>;
   }
 
@@ -64,31 +65,13 @@ export class CredentialVault {
     this.assertAvailable();
     const data = this.read();
     const encrypted = safeStorage.encryptString(JSON.stringify(value));
-    data.entries[validateKey(key)] = encrypted.toString("base64");
+    data.entries[validateCredentialKey(key)] = encrypted.toString("base64");
     this.write(data);
   }
 
   delete(key: string): void {
     const data = this.read();
-    delete data.entries[validateKey(key)];
+    delete data.entries[validateCredentialKey(key)];
     this.write(data);
   }
-}
-
-export function createCredentialRequestHandler(vault: CredentialVault) {
-  return async (method: string, params: unknown): Promise<unknown> => {
-    const body = (params ?? {}) as { key?: string; value?: Record<string, unknown> };
-    if (!body.key) throw new Error("Credential key is required");
-    if (method === "channelSecrets.get") return vault.get(body.key);
-    if (method === "channelSecrets.set") {
-      if (!body.value || typeof body.value !== "object") throw new Error("Credential value is required");
-      vault.set(body.key, body.value);
-      return { ok: true };
-    }
-    if (method === "channelSecrets.delete") {
-      vault.delete(body.key);
-      return { ok: true };
-    }
-    throw new Error(`Unsupported Host request: ${method}`);
-  };
 }

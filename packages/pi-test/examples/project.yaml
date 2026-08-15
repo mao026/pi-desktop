@@ -1,0 +1,54 @@
+# Canonical desktop schemaVersion 1 example. Surface entries may be incomplete.
+schemaVersion: 1
+id: ydj
+name: 易点金
+environment: staging
+createdAt: 2026-08-11T08:00:00Z
+updatedAt: 2026-08-11T08:00:00Z
+
+surfaces:
+  h5:
+    url: null
+    viewport: "390x844"
+  admin:
+    url: https://admin.example.com/
+    viewport: "1440x900"
+  app:
+    package: null
+    activity: null
+    serial: null
+  miniprogram:
+    name: null
+    wechatPackage: com.tencent.mm
+    appId: null
+    entry: null
+
+identities:
+  customer:
+    name: 普通用户
+    surfaces: [h5, app]
+  operator:
+    name: 后台操作员
+    surfaces: [admin]
+
+defaultIdentityBySurface:
+  h5: customer
+  app: customer
+  admin: operator
+
+inputs:
+  phone:
+    description: 登录手机号
+    secret: true
+
+defaults:
+  regression: []
+  riskConfirm: true
+  visualCheck: false
+
+zentao:
+  connectionId: company-zentao
+  productId: 7
+  moduleId: 9
+  openedBuild: trunk
+  assignedTo: developer

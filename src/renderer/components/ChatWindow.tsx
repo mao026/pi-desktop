@@ -46,6 +46,8 @@ interface Props {
     usage: { percent: number | null; contextWindow: number; tokens: number | null } | null,
   ) => void;
   onOpenFile?: (filePath: string) => void;
+  testMode?: boolean;
+  initialSessionId?: string | null;
 }
 
 function phaseLabel(phase: AgentPhase, t: (key: string, fallback: string) => string): string {
@@ -224,6 +226,8 @@ export function ChatWindow({
   onSessionStatsPanelOpen,
   onContextUsageChange,
   onOpenFile,
+  testMode = false,
+  initialSessionId = null,
 }: Props) {
   const { soundEnabled, onSoundToggle, playDoneSound, unlockAudio } = useAudio();
   const isMobile = useIsMobile();
@@ -316,6 +320,8 @@ export function ChatWindow({
     onBranchDataChange,
     onSystemPromptChange,
     onSessionStatsPanelOpen,
+    sessionMode: testMode ? "test" : "general",
+    initialSessionId,
   });
 
   // Push session stats up to AppShell for the top bar.
@@ -368,10 +374,10 @@ export function ChatWindow({
 
   const onDrop = useCallback(
     (files: File[]) => {
-      if (agentRunning) return;
+      if (testMode || agentRunning) return;
       chatInputRef?.current?.addImages(files);
     },
-    [agentRunning, chatInputRef],
+    [agentRunning, chatInputRef, testMode],
   );
 
   const { isDragOver, handleDragEnter, handleDragOver, handleDragLeave, handleDrop } = useDragDrop(onDrop);
@@ -435,29 +441,30 @@ export function ChatWindow({
       onModelChange={handleModelChange}
       onModelsRefresh={refreshModels}
       onModelsRefreshCancel={cancelModelRefresh}
-      onCompact={session || isNew ? handleCompact : undefined}
-      onAbortCompaction={handleAbortCompaction}
+      onCompact={!testMode && (session || isNew) ? handleCompact : undefined}
+      onAbortCompaction={testMode ? undefined : handleAbortCompaction}
       isCompacting={isCompacting}
       compactError={compactError}
       compactResult={compactResult}
       toolPreset={toolPreset}
-      onToolPresetChange={session || isNew ? handleToolPresetChange : undefined}
+      onToolPresetChange={!testMode && (session || isNew) ? handleToolPresetChange : undefined}
       thinkingLevel={thinkingLevel}
-      onThinkingLevelChange={session || isNew ? handleThinkingLevelChange : undefined}
+      onThinkingLevelChange={!testMode && (session || isNew) ? handleThinkingLevelChange : undefined}
       availableThinkingLevels={availableThinkingLevels}
       thinkingLevelMap={currentThinkingLevelMap}
       retryInfo={retryInfo}
       queuedMessages={queuedMessages}
-      onRecallQueue={handleRecallQueue}
-      slashCommands={slashCommands}
-      slashCommandsLoading={slashCommandsLoading}
-      onLoadSlashCommands={loadSlashCommands}
-      onBuiltinCommand={handleBuiltinSlashCommand}
+      onRecallQueue={testMode ? undefined : handleRecallQueue}
+      slashCommands={testMode ? [] : slashCommands}
+      slashCommandsLoading={testMode ? false : slashCommandsLoading}
+      onLoadSlashCommands={testMode ? undefined : loadSlashCommands}
+      onBuiltinCommand={testMode ? undefined : handleBuiltinSlashCommand}
       soundEnabled={soundEnabled}
-      onSoundToggle={onSoundToggle}
+      onSoundToggle={testMode ? undefined : onSoundToggle}
       onAudioUnlock={unlockAudio}
       draftKey={session?.id ?? (newSessionCwd ? `new:${newSessionCwd}` : undefined)}
-      cwd={session?.cwd ?? newSessionCwd}
+      cwd={testMode ? null : (session?.cwd ?? newSessionCwd)}
+      testMode={testMode}
     />
   );
 
@@ -609,7 +616,7 @@ export function ChatWindow({
                     whiteSpace: "nowrap",
                   }}
                 >
-                  Pi Agent Desktop
+                  {testMode ? "测试对话" : "Pi Agent Desktop"}
                 </span>
               </div>
             </div>

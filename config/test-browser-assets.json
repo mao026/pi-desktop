@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "cliVersion": "0.3.7",
+  "extensionVersion": "2.1",
+  "productExtensionVersion": "2.1-pi-test.2",
+  "sourceCommit": "bfcd4f3c94e7c9a007c8f05290cfffdb7ab4d8dd",
+  "basePackage": {
+    "name": "@sleepinsummer/agent-browser-cli",
+    "url": "https://registry.npmjs.org/@sleepinsummer/agent-browser-cli/-/agent-browser-cli-0.3.7.tgz",
+    "bytes": 80433,
+    "sha256": "28b4ff909267995d215ee21be894ea06b750fca08819f698f9dc0374a6a4e2c4"
+  },
+  "variants": [
+    {
+      "platform": "darwin",
+      "arch": "arm64",
+      "packageName": "@sleepinsummer/agent-browser-cli-darwin-arm64",
+      "url": "https://registry.npmjs.org/@sleepinsummer/agent-browser-cli-darwin-arm64/-/agent-browser-cli-darwin-arm64-0.3.7.tgz",
+      "bytes": 2885571,
+      "sha256": "cd8b9d6953c4f6bd626c8d4019571bd416971ccbf76abb5faabaa3bc04af7ce9",
+      "executable": "agent-browser-cli"
+    },
+    {
+      "platform": "darwin",
+      "arch": "x64",
+      "packageName": "@sleepinsummer/agent-browser-cli-darwin-x64",
+      "url": "https://registry.npmjs.org/@sleepinsummer/agent-browser-cli-darwin-x64/-/agent-browser-cli-darwin-x64-0.3.7.tgz",
+      "bytes": 3036396,
+      "sha256": "709ea639da075bf3b3aab1201d7230dfe5121065fd230006e143ae3259ef3da4",
+      "executable": "agent-browser-cli"
+    },
+    {
+      "platform": "win32",
+      "arch": "x64",
+      "packageName": "@sleepinsummer/agent-browser-cli-win32-x64",
+      "url": "https://registry.npmjs.org/@sleepinsummer/agent-browser-cli-win32-x64/-/agent-browser-cli-win32-x64-0.3.7.tgz",
+      "bytes": 3123536,
+      "sha256": "97a4027606047c2c0cb81785ca85702858810d21465a4431e1d434f47886db65",
+      "executable": "agent-browser-cli.exe"
+    },
+    {
+      "platform": "linux",
+      "arch": "x64",
+      "packageName": "@sleepinsummer/agent-browser-cli-linux-x64",
+      "url": "https://registry.npmjs.org/@sleepinsummer/agent-browser-cli-linux-x64/-/agent-browser-cli-linux-x64-0.3.7.tgz",
+      "bytes": 3165710,
+      "sha256": "dd6e28ceaad1b4766877f497afed266dfba0cccb1b52845e3e05203219975e2a",
+      "executable": "agent-browser-cli"
+    }
+  ]
+}

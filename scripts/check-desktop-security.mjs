@@ -13,18 +13,13 @@ const preload = read("src/preload/preload.ts");
 const globals = read("src/renderer/global.d.ts");
 const diagnostics = read("src/main/diagnostics.ts");
 const diagnosticsRedaction = read("src/main/diagnostics-redaction.ts");
-const fileViewer = read("src/renderer/components/FileViewer.tsx");
 const credentialVault = read("src/main/credential-vault.ts");
-const weixinChannelApi = read("src/agent-host/channels/adapters/weixin/api.ts");
-const telegramChannelApi = read("src/agent-host/channels/adapters/telegram/api.ts");
-const feishuChannelApi = read("src/agent-host/channels/adapters/feishu/api.ts");
-const channelManager = read("src/agent-host/channels/channel-manager.ts");
-const channelMediaStore = read("src/agent-host/channels/media-store.ts");
-const channelOutboundFiles = read("src/agent-host/channels/outbound-files.ts");
-const channelPiBridge = read("src/agent-host/channels/pi-session-bridge.ts");
+const credentialKey = read("src/main/credential-key.ts");
+const testWorkbenchService = read("src/main/test-workbench-service.ts");
+const deviceLicense = read("src/main/device-license.ts");
+const deviceLicenseFetch = read("src/main/device-license-fetch.ts");
+const testWorkbenchContract = read("src/contract/test-workbench.ts");
 const rpcManager = read("src/agent-host/rpc-manager.ts");
-const weixinMedia = read("src/agent-host/channels/adapters/weixin/media.ts");
-const channelContract = read("src/contract/api.ts");
 const desktopContract = read("src/contract/desktop.ts");
 const desktopIpc = read("src/main/ipc.ts");
 const updateAdapter = read("src/main/update-adapter.ts");
@@ -34,6 +29,21 @@ const desktopBuildWorkflow = read(".github/workflows/build-desktop.yml");
 const toolchainContractCheck = read("scripts/check-toolchain-contract.mjs");
 const upstreamToolchainCatalogCheck = read("scripts/verify-toolchain-catalog-upstream.mjs");
 const bundledToolsBuild = read("scripts/prepare-bundled-tools.mjs");
+const browserAssetCatalog = read("config/test-browser-assets.json");
+const androidAssetCatalog = read("config/test-android-assets.json");
+const browserPopup = `${read("config/chrome-extension-patch/popup.js")}\n${read("config/chrome-extension-patch/popup.html")}`;
+const browserBackground = read("build/chrome-extension/tmwd_cdp_bridge/background.js");
+const testBrowserAssets = read("src/main/test-browser-assets.ts");
+const testAndroidAssets = read("src/main/test-android-assets.ts");
+const testMobileDriver = read("src/main/test-mobile-driver.ts");
+const testCoordinator = read("src/main/test-coordinator.ts");
+const testExtension = read("packages/pi-test/extension/index.ts");
+const testCaseCore = read("packages/pi-test/core/case.ts");
+const testCaptureCore = read("packages/pi-test/core/capture.ts");
+const testFindingCore = read("packages/pi-test/core/finding.ts");
+const zentaoClient = read("src/main/zentao-client.ts");
+const zentaoFetch = read("src/main/zentao-fetch.ts");
+const testProjectCore = read("packages/pi-test/core/project.ts");
 const packagedToolchainVerifier = read("scripts/verify-packaged-toolchains.mjs");
 const toolchainSearch = read("src/agent-host/toolchain-search.ts");
 const toolchainInstaller = read("src/main/toolchains/installer.ts");
@@ -42,33 +52,6 @@ const electronRuntimeFetch = read("src/main/toolchains/electron-runtime-fetch.ts
 const legacyNpmCommand = read("src/main/toolchains/legacy-npm-command.ts");
 const toolchainStateStore = read("src/main/toolchains/state-store.ts");
 const verifyScript = read("scripts/verify.mjs");
-const browserContract = read("src/contract/browser.ts");
-const browserSettings = read("src/main/browser/browser-settings.ts");
-const browserPolicy = read("src/main/browser/browser-policy.ts");
-const browserService = read("src/main/browser/browser-service.ts");
-const browserAuthorization = read("src/main/browser/browser-authorization-coordinator.ts");
-const browserGrantStore = read("src/main/browser/browser-persistent-grant-store.ts");
-const browserTools = read("src/agent-host/browser-tools.ts");
-const browserTabs = read("src/main/browser/browser-tab-manager.ts");
-const browserNetwork = read("src/main/browser/browser-network-interceptor.ts");
-const browserIdentity = read("src/main/browser/browser-identity-manager.ts");
-const browserRecorder = read("src/main/browser/browser-network-recorder.ts");
-const browserConsole = read("src/main/browser/browser-console-buffer.ts");
-const browserInspectionStore = read("src/main/browser/browser-inspection-store.ts");
-const browserRedaction = read("src/main/browser/browser-redaction.ts");
-const browserSnippets = read("src/main/browser/browser-snippet-store.ts");
-const browserVault = read("src/main/browser/browser-secret-vault.ts");
-const browserAgentRuntime = read("src/agent-host/browser-agent-runtime.ts");
-const toolchainBash = read("src/agent-host/toolchain-bash.ts");
-const packageJson = read("package.json");
-const browserInspectRpc = browserContract.slice(
-  browserContract.indexOf('"browser.inspect": {'),
-  browserContract.indexOf('"browser.screenshot": {'),
-);
-const browserDeniedTargetState = browserAgentRuntime.slice(
-  browserAgentRuntime.indexOf("type DeniedTarget ="),
-  browserAgentRuntime.indexOf("type BrowserWorkingMemory ="),
-);
 const rendererCsp = protocol.slice(protocol.indexOf("const CSP ="), protocol.indexOf("const HTML_PREVIEW_CSP ="));
 
 const checks = [
@@ -98,7 +81,6 @@ const checks = [
     "diagnostic export must redact bounded logs, summarize toolchains, and exclude raw crash process memory",
   ],
   [!/script-src[^;]*unsafe-inline/.test(rendererCsp), "renderer script-src must not allow unsafe-inline"],
-  [fileViewer.includes('sandbox="allow-scripts"'), "HTML previews must remain sandboxed"],
   [
     protocol.includes("\"object-src 'none'; \"") && protocol.includes("\"form-action 'none'\""),
     "HTML preview CSP must block plugins and forms",
@@ -120,12 +102,111 @@ const checks = [
     "Desktop grep/find must use injected rg/fd descriptors and fixed build-time assets without upstream dynamic downloads",
   ],
   [
+    browserAssetCatalog.includes('"cliVersion": "0.3.7"') &&
+      browserAssetCatalog.includes('"productExtensionVersion": "2.1-pi-test.2"') &&
+      bundledToolsBuild.includes("prepareBrowserAssets") &&
+      bundledToolsBuild.includes("verifyDownloadedArtifact") &&
+      bundledToolsBuild.includes("rawSendCount !== 10") &&
+      browserBackground.includes("function sendWs(message)") &&
+      browserBackground.includes("socket.readyState !== WebSocket.OPEN") &&
+      !browserBackground.includes("ws.send(") &&
+      testBrowserAssets.includes("prepareTestBrowserAssets") &&
+      testBrowserAssets.includes("asset integrity check failed") &&
+      testBrowserAssets.includes('const lockName = ".agent-browser-cli.lock"') &&
+      testBrowserAssets.includes("lock.size !== 0") &&
+      testBrowserAssets.includes('path.win32.join(localAppData, "PiTestDesktop")') &&
+      !/cookie|clipboard/i.test(browserPopup),
+    "test browser CLI and patched Chrome extension must be fixed build-time assets, guard every WebSocket send, verify private installation, and expose no popup cookie or clipboard access",
+  ],
+  [
+    androidAssetCatalog.includes('"version": "0.1.38"') &&
+      androidAssetCatalog.includes('"version": "37.0.1"') &&
+      bundledToolsBuild.includes("prepareWindowsHandsets") &&
+      testAndroidAssets.includes("prepareTestAndroidAssets") &&
+      testAndroidAssets.includes("installPlatformTools") &&
+      testAndroidAssets.includes("Android asset integrity check failed") &&
+      testAndroidAssets.includes('path.win32.join(localAppData, "PiTestDesktop", "test-android")') &&
+      testMobileDriver.includes("PATH: assets.platformToolsPath") &&
+      testMobileDriver.includes("executable: this.assets.adbPath") &&
+      testMobileDriver.includes("executable: this.assets.hsPath") &&
+      !testMobileDriver.includes("process.env.PATH") &&
+      !testCoordinator.includes('action.type === "shell"'),
+    "Android testing must use fixed private Handsets/platform-tools assets and expose no arbitrary shell action",
+  ],
+  [
+    testCoordinator.includes('request.action === "pause"') &&
+      testCoordinator.includes('request.action === "takeover"') &&
+      testCoordinator.includes('request.action === "resume"') &&
+      testCoordinator.includes("completePendingControl") &&
+      testCoordinator.includes('control.state !== "running"') &&
+      testCoordinator.includes("businessWriteConfirmedSurfaces") &&
+      testCoordinator.includes("RUN_SCOPE_CONFIRMATION_REQUIRED") &&
+      testCoordinator.includes('scope: "run"') &&
+      testCoordinator.includes('scope: "action"') &&
+      testCoordinator.includes('project.environment === "production" && request.risk === "business_write"'),
+    "pause, takeover, resume, run-scoped business-write confirmation, and production read-only gates must remain Main-owned",
+  ],
+  [
+    testExtension.includes('"test_setup"') &&
+      testExtension.includes('"test_map"') &&
+      testExtension.includes('"test_case"') &&
+      testExtension.includes('"test_play"') &&
+      testExtension.includes('"test_finding"') &&
+      testExtension.includes('method === "test.play" ? 30 * 60_000 : 40_000') &&
+      main.includes('method === "test.setup"') &&
+      main.includes('method === "test.map"') &&
+      main.includes('method === "test.case"') &&
+      main.includes('method === "test.play"') &&
+      main.includes('method === "test.finding"') &&
+      testCoordinator.includes('request.trigger ?? "manual"') &&
+      testCoordinator.includes('throw new TestCoordinatorError("CASE_NOT_STABLE"') &&
+      testCoordinator.includes("caseHasProductionUnsafeAction") &&
+      testCoordinator.includes("compileCapturePattern") &&
+      testCaseCore.includes("hasSuccessfulRun") &&
+      testCaseCore.includes("miniprogram case 不能晋级 stable") &&
+      testCaptureCore.includes("capture pattern 必须且只能有一个捕获组") &&
+      testWorkbenchService.includes("jpe?g|txt") &&
+      !testExtension.includes('Type.Literal("shell")'),
+    "domain tools and deterministic playback must remain Main-owned, stable-gated, capture-bounded, and free of arbitrary script or shell inputs",
+  ],
+  [
+    testProjectCore.includes("visualModel?: VisualModelRef") &&
+      testProjectCore.includes("visualCheck: opts.visualCheck ?? false") &&
+      desktopIpc.includes('title: "明显视觉异常检查"') &&
+      desktopIpc.includes("截图只发送给当前选择的视觉模型") &&
+      testExtension.includes("analyzeVisual") &&
+      testExtension.includes("if (!value.visualModel) throw new Error") &&
+      testExtension.includes("delete details.image") &&
+      rpcManager.includes("analyzeVisualScreenshot") &&
+      testCoordinator.includes("SENSITIVE_VISUAL_PAGE") &&
+      testCoordinator.includes("project.defaults?.visualCheck !== true") &&
+      testCoordinator.includes('throw new TestCoordinatorError("VISUAL_MODEL_REQUIRED"') &&
+      testCoordinator.indexOf("SENSITIVE_VISUAL_PAGE.test(observed.text)") <
+        testCoordinator.indexOf('captureEvidence(root, project, request.surface as SupportedSurface, "visual-check")'),
+    "visual checks must be project opt-in, image-model gated, sensitive-page blocked before capture, and keep screenshot base64 out of tool details",
+  ],
+  [
+    main.includes("shell.trashItem(projectRoot)") &&
+      desktopIpc.includes('"desktop:test:set-project-archived"') &&
+      desktopIpc.includes('"desktop:test:remove-project"') &&
+      desktopIpc.includes('"desktop:test:delete-project-data"') &&
+      desktopIpc.includes("getProjectDeletionSummary") &&
+      testWorkbenchService.includes("confirmationName !== project.name") &&
+      testWorkbenchService.includes("await this.trashProject(root)") &&
+      !testWorkbenchService.includes("rmSync(projectRoot"),
+    "project archive, registration removal, and local-data deletion must be separate Main-owned operations using the system trash and name confirmation",
+  ],
+  [
     main.includes('app.isPackaged && process.argv.includes("--validate-packaged-startup")') &&
       main.includes("packaged-startup-check.json") &&
       main.includes("getToolchainAckRevision") &&
+      main.includes("startupTestBrowserAssetsReady") &&
+      main.includes("startupTestAndroidAssetsReady") &&
+      main.includes("testBrowserExtensionVersion") &&
+      main.includes("testHandsetsVersion") &&
       main.includes('candidate.provider === "bundled"') &&
       main.includes('candidate.health === "healthy"'),
-    "the production startup probe must be packaged-only and require Renderer, Host revision ack, and healthy bundled search tools",
+    "the production startup probe must be packaged-only and require Renderer, Host revision ack, healthy bundled search tools, and verified test browser/Android assets",
   ],
   [
     packagedToolchainVerifier.includes("darwin-arm64|darwin-x64|win32-x64|linux-x64") &&
@@ -133,13 +214,18 @@ const checks = [
         'assertExact(entries, ["core", "core-catalog.json", "runtime-catalog.json"]',
       ) &&
       packagedToolchainVerifier.includes("verifyManifestFile") &&
+      packagedToolchainVerifier.includes("verifyTestBrowserAssets") &&
+      packagedToolchainVerifier.includes("verifyTestAndroidAssets") &&
+      packagedToolchainVerifier.includes("2\\.1-pi-test") &&
       packagedToolchainVerifier.includes("verifyLinuxSandbox") &&
       packagedToolchainVerifier.includes("stat.uid !== 0") &&
       packagedToolchainVerifier.includes('spawnSync(byComponent.get("ripgrep")') &&
       packagedToolchainVerifier.includes("runPackagedStartup") &&
       packagedToolchainVerifier.includes("verifyLinuxAppImageDesktopEntry") &&
       packagedToolchainVerifier.includes('APPIMAGE_EXTRACT_AND_RUN: "1"') &&
-      packagedToolchainVerifier.includes("hostAckRevision !== report.revision"),
+      packagedToolchainVerifier.includes("hostAckRevision !== report.revision") &&
+      packagedToolchainVerifier.includes('report.testBrowserCliVersion !== "0.3.7"') &&
+      packagedToolchainVerifier.includes('report.testHandsetsVersion !== "0.1.38"'),
     "the packaged E2E must enforce the release matrix, exact resources, hashes, functional rg/fd, and production startup ack",
   ],
   [
@@ -191,54 +277,59 @@ const checks = [
   [!/<script(?![^>]*\bsrc=)[^>]*>/i.test(html), "renderer HTML must not contain inline scripts"],
   [preload.includes("../contract/desktop"), "preload must use the shared desktop bridge contract"],
   [globals.includes("../contract/desktop"), "renderer globals must use the shared desktop bridge contract"],
-  [credentialVault.includes("safeStorage.encryptString"), "channel credentials must use Electron safeStorage"],
-  [credentialVault.includes("safeStorage.isEncryptionAvailable"), "channel credential persistence must fail closed"],
-  [!/(createServer|\.listen\s*\()/.test(weixinChannelApi), "Weixin MVP must not open a local listener"],
-  [!/(createServer|\.listen\s*\()/.test(telegramChannelApi), "Telegram polling must not open a local listener"],
-  [!/(createServer|\.listen\s*\()/.test(feishuChannelApi), "Feishu WebSocket mode must not open a local listener"],
+  [credentialVault.includes("safeStorage.encryptString"), "credentials must use Electron safeStorage"],
+  [credentialVault.includes("safeStorage.isEncryptionAvailable"), "credential persistence must fail closed"],
   [
-    feishuChannelApi.includes("im.v1.messageResource.get") &&
-      feishuChannelApi.includes("FEISHU_MEDIA_MAX_BYTES") &&
-      feishuChannelApi.includes("readLimitedStream"),
-    "Feishu inbound media must use the message resource API with a local byte limit",
+    credentialKey.includes('"device:license:identity"') &&
+      credentialKey.includes("projectIdentityCredentialKey") &&
+      credentialKey.includes("test:project:${projectId}:identity:${identityId}") &&
+      credentialVault.includes("validateCredentialKey(key)") &&
+      credentialVault.includes("has(key: string)") &&
+      testWorkbenchService.includes("credentialConfigured") &&
+      testWorkbenchService.includes("this.identityVault.set") &&
+      !testWorkbenchContract.includes("getIdentityCredential") &&
+      !testWorkbenchContract.includes("readIdentityCredential") &&
+      deviceLicense.includes('const IDENTITY_KEY = "device:license:identity"') &&
+      deviceLicense.includes('const IDENTITY_KEY = "device:license:identity"') &&
+      deviceLicense.includes('generateKeyPairSync("ed25519")') &&
+      deviceLicense.includes('privateKey.export({ format: "der", type: "pkcs8" })'),
+    "device and project identities must persist only through allowlisted safeStorage keys, with project credentials exposed as write-only configured state",
   ],
   [
-    channelManager.indexOf("evaluateInboundPolicy") < channelManager.indexOf("adapter.downloadInbound"),
-    "channel access policy must run before provider media download",
+    credentialKey.includes("zentaoTokenCredentialKey") &&
+      credentialKey.includes("test:zentao:${connectionId}:token") &&
+      testProjectCore.includes("connectionId: string") &&
+      !testProjectCore.includes("token:") &&
+      testFindingCore.includes("FindingRemoteSyncStatus") &&
+      testFindingCore.includes("setFindingRemote") &&
+      testWorkbenchService.includes("value.baseUrl !== baseUrl") &&
+      testWorkbenchService.includes("ZENTAO_REAUTH_REQUIRED") &&
+      zentaoClient.includes('headers.set("Token", this.token)') &&
+      zentaoClient.includes('redirect: "error"') &&
+      zentaoClient.includes("MAX_JSON_BYTES") &&
+      zentaoClient.includes("findBugByMarker") &&
+      zentaoClient.includes("Pi-Test:") &&
+      zentaoFetch.includes('redirect: "manual"') &&
+      zentaoFetch.includes("MAX_RESPONSE_BYTES") &&
+      zentaoFetch.includes("isUnsafeZentaoHost") &&
+      desktopIpc.includes('title: "提交禅道 Bug"') &&
+      desktopIpc.includes('title: "使用未加密的禅道连接"') &&
+      desktopIpc.includes('"desktop:test:open-zentao-bug"') &&
+      desktopIpc.includes("workbench.getZentaoBugUrl") &&
+      !testWorkbenchContract.includes("token: string") &&
+      !testExtension.includes("zentao"),
+    "ZenTao must keep tokens in the Main vault, bound and redirect-free network access, stable-marker deduplication, Main confirmations, and no Agent tool surface",
   ],
   [
-    channelMediaStore.includes("CHANNEL_MEDIA_MAX_BYTES") &&
-      channelMediaStore.includes("CHANNEL_MEDIA_MAX_ATTACHMENTS") &&
-      channelMediaStore.includes("info.isSymbolicLink()") &&
-      channelMediaStore.includes("mode: 0o600"),
-    "channel media staging must retain byte/count/symlink/private-file controls",
-  ],
-  [
-    channelOutboundFiles.includes("realpath") &&
-      channelOutboundFiles.includes("MARKDOWN_LINK") &&
-      channelOutboundFiles.includes("isInside(canonical, root)") &&
-      channelPiBridge.includes("collectOutboundFiles({ finalText: result.finalText, cwd })"),
-    "linked-file delivery must remain inside the actual bound session workspace",
-  ],
-  [
-    weixinMedia.includes('url.protocol !== "https:"') && weixinMedia.includes('redirect: "error"'),
-    "Weixin media must use trusted HTTPS origins without cross-origin redirects",
-  ],
-  [
-    channelPiBridge.includes("channelPromptText(envelope.text") && !channelPiBridge.includes("[外部消息来源："),
-    "channel user prompts must contain the user's text without transport metadata wrappers",
-  ],
-  [
-    rpcManager.includes("expandPromptTemplates: false") && rpcManager.includes("stripLegacyChannelPrompts"),
-    "channel prompts must avoid local expansion and remove legacy transport metadata from model history",
-  ],
-  [
-    !channelContract.includes("botToken") && !channelContract.includes("appSecret"),
-    "channel RPC must not expose raw secrets",
-  ],
-  [
-    desktopContract.includes("setChannelCredential") && !desktopContract.includes("getChannelCredential"),
-    "renderer channel credential bridge must remain write-only",
+    deviceLicense.includes('cache: "no-store"') &&
+      deviceLicense.includes('redirect: "error"') &&
+      deviceLicenseFetch.includes('redirect: "manual"') &&
+      deviceLicenseFetch.includes("Device license redirect rejected") &&
+      deviceLicense.includes("MAX_LICENSE_BYTES") &&
+      deviceLicense.includes("verify(null,") &&
+      deviceLicense.includes("Cached licenses never authorize") &&
+      testWorkbenchContract.includes("deviceFingerprint: string | null"),
+    "online device authorization must be bounded, signed, redirect-free, and fail closed without cache authorization",
   ],
   [
     toolchainContractCheck.includes("ToolchainActionRequest") &&
@@ -327,150 +418,6 @@ const checks = [
       main.includes("updateManager?.setRunningSessionCount(ids.length)") &&
       main.includes("updateManager.startAutomaticChecks()"),
     "main process must own updater initialization, state publication, and session-aware scheduling",
-  ],
-  [
-    browserTabs.includes("new WebContentsView") &&
-      browserTabs.includes("nodeIntegration: false") &&
-      browserTabs.includes("nodeIntegrationInWorker: false") &&
-      browserTabs.includes("contextIsolation: true") &&
-      browserTabs.includes("sandbox: true") &&
-      browserTabs.includes("webviewTag: false") &&
-      !/webPreferences\s*:\s*\{[^}]*preload\s*:/s.test(browserTabs),
-    "remote Browser WebContentsView must remain sandboxed without Node, webviewTag, or a preload bridge",
-  ],
-  [
-    browserNetwork.includes("setPermissionCheckHandler") &&
-      browserNetwork.includes("setPermissionRequestHandler") &&
-      browserService.includes("setDevicePermissionHandler(() => false)"),
-    "Browser Sessions must install request/check permission handlers and deny device permissions by default",
-  ],
-  [
-    /automation:\s*\{[\s\S]*?enabled:\s*false/.test(browserSettings) &&
-      /advancedBrowserMode:\s*\{[\s\S]*?enabled:\s*false/.test(browserSettings) &&
-      browserPolicy.includes("enabled: false") &&
-      browserPolicy.includes("createDisabledAdvancedRuntimePolicy") &&
-      !browserSettings.includes("humanizedInput"),
-    "Agent Browser automation and the single Advanced Browser Mode grant must default to disabled",
-  ],
-  [
-    browserService.includes("isBrowserHostMethod(method)") &&
-      !browserContract.slice(browserContract.indexOf("export interface BrowserHostRpc")).includes("updateSettings") &&
-      !browserContract.slice(browserContract.indexOf("export interface BrowserHostRpc")).includes("setUnsafePolicy"),
-    "Host Browser RPC must be allowlisted and must not expose settings or Unsafe policy writes",
-  ],
-  [
-    browserContract.includes('"browser.requestAuthorization"') &&
-      browserTools.includes('"browser.requestAuthorization"') &&
-      browserService.indexOf('method === "browser.requestAuthorization"') <
-        browserService.indexOf("this.policy.assertRequest(context, permission)") &&
-      !desktopContract.includes("browserGrantSession:") &&
-      !preload.includes("desktop:browser:grant-session"),
-    "Agent Browser tools must preflight in Main before side effects and Renderer must not mint arbitrary runtime grants",
-  ],
-  [
-    browserGrantStore.includes("mode: 0o600") &&
-      browserGrantStore.includes("fs.renameSync(temp, this.filePath)") &&
-      browserAuthorization.includes("private readonly pendingById") &&
-      browserAuthorization.includes("AUTHORIZATION_TIMEOUT") &&
-      browserAuthorization.includes("isRendererAvailable") &&
-      !browserGrantStore.includes("capabilityLeaseId"),
-    "persistent Browser policies must be private and atomic while pending requests and leases remain in memory",
-  ],
-  [
-    desktopIpc.includes("const requireTrustedBrowser") &&
-      desktopIpc.includes("assertTrustedToolchainSender(event)") &&
-      desktopIpc.includes("event.senderFrame !== win.webContents.mainFrame") &&
-      browserService.includes('this.confirmations.consume(proof, "advanced-browser-mode", patch)') &&
-      !browserService.includes('"unsafe-lab"'),
-    "Browser settings IPC must validate the main-window sender/frame and consume one-time confirmation proofs",
-  ],
-  [
-    browserVault.includes("safeStorage") === false &&
-      browserVault.includes("codec.encrypt(value)") &&
-      browserService.includes("getRedactedDiagnostics") &&
-      !/interface BrowserDiagnostics[\s\S]*?(cookie|authorization|password|secret|pageText|javascript)/i.test(
-        browserContract.slice(
-          browserContract.indexOf("export interface BrowserDiagnostics"),
-          browserContract.indexOf("export interface BrowserRendererState"),
-        ),
-      ),
-    "Browser diagnostics must expose summaries only while secret values remain encrypted behind opaque references",
-  ],
-  [
-    !browserTools.includes('"browser_set_cookies"') &&
-      browserService.includes("Cookie mutation is unavailable because sensitive ToolResult persistence isolation") &&
-      browserService.includes("Full cookie values are unavailable because sensitive ToolResult persistence isolation"),
-    "Agent Browser tools must not accept cookie values until Gate A proves tool-call persistence isolation",
-  ],
-  [
-    !main.includes("remote-debugging-port") &&
-      !browserTabs.includes("remote-debugging-port") &&
-      !main.includes("ignore-certificate-errors") &&
-      !browserTabs.includes("ignore-certificate-errors") &&
-      !windowFactory.includes("webSecurity: false") &&
-      browserTabs.includes('input.key === "F12"'),
-    "production Browser code must not expose remote debugging, global certificate bypass, or weaken the main Renderer",
-  ],
-  [
-    browserIdentity.includes("Emulation.setUserAgentOverride") &&
-      !/Object\.defineProperty\s*\(\s*navigator|navigator\.__defineGetter__|Page\.addScriptToEvaluateOnNewDocument/.test(
-        browserIdentity,
-      ) &&
-      browserNetwork.includes("applyIdentityHeaders"),
-    "Browser identity must use Chromium/CDP and coherent network headers without JavaScript navigator patches",
-  ],
-  [
-    browserTools.includes('browser_inspect: "read"') &&
-      browserInspectRpc.includes("sinceInspectionId?: string") &&
-      browserInspectRpc.includes("screenshot?:") &&
-      !/(?:source|selector|console|networkBody|cookie|header|action)\s*\??:/i.test(browserInspectRpc) &&
-      browserInspectionStore.includes("contentHash: string") &&
-      browserInspectionStore.includes("viewportHash: string") &&
-      !/\b(?:text|base64|screenshot|nodes)\s*:/.test(browserInspectionStore),
-    "browser_inspect must remain a read-only bounded observation without action, advanced data, or persistent page/image content",
-  ],
-  [
-    browserTabs.includes('from "./browser-redaction.ts"') &&
-      browserConsole.includes('from "./browser-redaction.ts"') &&
-      browserRecorder.includes('from "./browser-redaction.ts"') &&
-      browserRedaction.includes("SENSITIVE_QUERY_KEY") &&
-      browserRedaction.includes("SECRET_TEXT") &&
-      browserTabs.includes("MAX_INSPECTION_SCREENSHOT_BYTES") &&
-      browserTabs.includes("DEFAULT_INSPECTION_MAX_TEXT_CHARS = 8_000") &&
-      browserTabs.includes("DEFAULT_INSPECTION_MAX_NODES = 100") &&
-      browserTabs.includes("DEFAULT_INSPECTION_NODE_CHARS = 16_000") &&
-      browserTabs.includes("input.screenshot?.enabled === true"),
-    "inspection, Console, network, frame URLs, and visual results must share redaction and bounded result budgets",
-  ],
-  [
-    browserDeniedTargetState.includes("keyHash: string") &&
-      browserDeniedTargetState.includes("originHash: string") &&
-      !browserDeniedTargetState.includes("origin: string") &&
-      browserAgentRuntime.includes("hashRouteValue(target.origin)") &&
-      browserAgentRuntime.includes("BROWSER_RETRY_BLOCKED") &&
-      browserAgentRuntime.includes("BROWSER_CALL_BUDGET_EXCEEDED") &&
-      browserAgentRuntime.includes("const REPLAN_CALLS = 30") &&
-      browserAgentRuntime.includes("const MAX_CALLS = 60") &&
-      rpcManager.includes("browserAgentRuntime.guardBash") &&
-      toolchainBash.includes("await beforeExec?.(command)"),
-    "Browser attempt/workflow state must remain hashed, budgeted, and enforced before Bash execution",
-  ],
-  [
-    browserTools.includes("promptGuidelines: [...BROWSER_CANONICAL_GUIDELINES]") &&
-      browserAgentRuntime.includes("Observe once with browser_inspect") &&
-      browserAgentRuntime.includes("browser_network_summary before network_list/body") &&
-      browserService.includes('workflowGuardScope: "obvious-workflow-bypass-only"') &&
-      !/"(?:playwright|puppeteer)"\s*:/.test(packageJson),
-    "Browser tools must share canonical efficiency guidance and label the workflow guard as narrower than an OS sandbox without bundling a second browser",
-  ],
-  [
-    browserRecorder.includes("const REPLAY_TTL_MS = 10 * 60 * 1_000") &&
-      browserRecorder.includes("private readonly sealed = new Map") &&
-      browserRecorder.includes("this.sealed.clear()") &&
-      !browserTools.includes('"browser_page_code_delete"') &&
-      !browserTools.includes('"browser_page_code_set_enabled"') &&
-      browserSnippets.includes("assertSnippetSafe"),
-    "sealed replay data must be short-lived Main memory and Agent tools must not mutate the snippet library",
   ],
 ];
 

@@ -7,16 +7,11 @@ import { registerHandlers } from "./handlers";
 import { startSessionWatcher } from "./session-watcher";
 import { toolchainRuntime } from "./toolchain-runtime";
 import type { ToolchainSnapshot } from "../shared/toolchains/types";
-import { installToolchainGitRunner } from "./toolchain-git";
-import type { BrowserCapabilitySnapshot } from "../contract/browser";
-import { browserCapabilityRuntime } from "./browser-capability-runtime";
-import { syncBrowserToolsForAllSessions } from "./rpc-manager";
 import { readPiRuntimeVersion } from "./runtime-version";
 
 const piRuntimeVersion = readPiRuntimeVersion();
 
 const server = createRpcServer();
-const restoreGitRunner = installToolchainGitRunner();
 const stopHandlers = registerHandlers(server);
 const stopWatcher = startSessionWatcher(server);
 
@@ -32,7 +27,7 @@ function log(message: string): void {
 const parentPort = process.parentPort;
 if (parentPort) {
   parentPort.on("message", (event) => {
-    const msg = event.data as { type?: string; snapshot?: ToolchainSnapshot | BrowserCapabilitySnapshot };
+    const msg = event.data as { type?: string; snapshot?: ToolchainSnapshot };
     if (msg?.type === "ping") {
       parentPort.postMessage({ type: "pong", ts: Date.now() });
       return;
@@ -62,21 +57,8 @@ if (parentPort) {
       }
       return;
     }
-    if (msg?.type === "browser:init" || msg?.type === "browser:changed") {
-      try {
-        if (!msg.snapshot) throw new Error("missing snapshot");
-        browserCapabilityRuntime.apply(msg.snapshot as BrowserCapabilitySnapshot);
-        syncBrowserToolsForAllSessions();
-        parentPort.postMessage({ type: "browser:ack", revision: msg.snapshot.revision });
-        log(`browser ${msg.type === "browser:init" ? "initialized" : "updated"} revision=${msg.snapshot.revision}`);
-      } catch (error) {
-        log(`browser capability snapshot rejected: ${error instanceof Error ? error.message : String(error)}`);
-      }
-      return;
-    }
     if (msg?.type === "shutdown") {
       stopWatcher();
-      restoreGitRunner();
       void stopHandlers().finally(() => process.exit(0));
     }
   });

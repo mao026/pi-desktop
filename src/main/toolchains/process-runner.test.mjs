@@ -36,3 +36,23 @@ test("times out a stalled probe", async () => {
   assert.equal(result.timedOut, true);
   assert.notEqual(result.exitCode, 0);
 });
+
+test("timeout resolves when a descendant keeps the output pipes open", async () => {
+  const script = `
+    const { spawn } = require("node:child_process");
+    const child = spawn(${JSON.stringify(process.execPath)}, ["-e", "setTimeout(() => {}, 1500)"], {
+      detached: true,
+      stdio: ["ignore", process.stdout, process.stderr],
+    });
+    child.unref();
+    setInterval(() => {}, 1000);
+  `;
+  const result = await runProbeCommand({
+    executable: process.execPath,
+    args: ["-e", script],
+    timeoutMs: 50,
+  });
+
+  assert.equal(result.timedOut, true);
+  assert.ok(result.durationMs < 500, `probe took ${result.durationMs}ms`);
+});

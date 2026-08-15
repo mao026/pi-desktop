@@ -81,6 +81,7 @@ interface Props {
   draftKey?: string;
   /** Session working directory — enables the @ file autocomplete menu */
   cwd?: string | null;
+  testMode?: boolean;
 }
 
 export interface ChatInputHandle {
@@ -249,6 +250,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
     onPromptWithStreamingBehavior,
     draftKey,
     cwd,
+    testMode = false,
   }: Props,
   ref,
 ) {
@@ -361,7 +363,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
 
   const processImageFiles = useCallback(
     async (files: File[]) => {
-      if (isStreaming) return;
+      if (testMode || isStreaming) return;
       const imageFiles = files.filter((f) => f.type.startsWith("image/"));
       if (!imageFiles.length) return;
       const newImages = await Promise.all(
@@ -382,7 +384,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
       );
       setAttachedImages((prev) => [...prev, ...newImages]);
     },
-    [isStreaming],
+    [isStreaming, testMode],
   );
 
   const removeImage = useCallback((index: number) => {
@@ -464,7 +466,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
       value,
       images: attachedImages.map((img) => ({ ...img })),
     };
-    if (!attachedImages.length && msg.startsWith("/") && onBuiltinCommand) {
+    if (!testMode && !attachedImages.length && msg.startsWith("/") && onBuiltinCommand) {
       const result = await onBuiltinCommand(msg);
       if (result.handled) {
         if (!result.error) clearInput();
@@ -485,9 +487,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
       setValue(snapshot.value);
       setAttachedImages(snapshot.images);
     }
-  }, [value, attachedImages, isStreaming, onBuiltinCommand, onSend, clearInput, onAudioUnlock]);
+  }, [value, attachedImages, isStreaming, onBuiltinCommand, onSend, clearInput, onAudioUnlock, testMode]);
 
-  const slashQuery = value.startsWith("/") && !/\s/.test(value.slice(1)) ? value.slice(1).toLowerCase() : null;
+  const slashQuery =
+    !testMode && value.startsWith("/") && !/\s/.test(value.slice(1)) ? value.slice(1).toLowerCase() : null;
 
   const filteredSlashCommands = (() => {
     if (slashQuery === null) return [];
@@ -535,14 +538,14 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
   // Disabled entirely when there is no cwd (new session without a directory).
   const updateAtQuery = useCallback(
     (text: string, cursor: number | null) => {
-      if (!cwd) {
+      if (testMode || !cwd) {
         setAtQuery(null);
         return;
       }
       const pos = cursor ?? text.length;
       setAtQuery(extractAtQuery(text.slice(0, pos)));
     },
-    [cwd],
+    [cwd, testMode],
   );
 
   const atQueryText = atQuery?.query ?? null;
@@ -1087,6 +1090,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
         type="file"
         accept="image/*"
         multiple
+        hidden={testMode}
         disabled={isStreaming}
         style={{ display: "none" }}
         onChange={(e) => {
@@ -1590,7 +1594,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                   ? t("steerOrQueue", "Steer now / queue follow-up…")
                   : isStreaming
                     ? t("agentRunning", "Agent is running…")
-                    : t("messagePlaceholder", "Message… Type / for commands, @ for files")
+                    : testMode
+                      ? "输入测试任务或结果判断…"
+                      : t("messagePlaceholder", "Message… Type / for commands, @ for files")
               }
               rows={1}
               style={{
@@ -1750,6 +1756,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
           >
             <button
               onClick={() => fileInputRef.current?.click()}
+              hidden={testMode}
               disabled={isStreaming}
               title={t("attachImage", "Attach image")}
               style={{

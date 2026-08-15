@@ -7,12 +7,15 @@ import { appendMainLog } from "../main/logger";
 import { handleAppProtocol, registerAppProtocol, rendererRootPath } from "../main/protocol";
 import { createMainWindow } from "../main/window";
 import { runSmokeHostChecks } from "./host-checks";
-import { createCredentialRequestHandler, CredentialVault } from "../main/credential-vault";
+import { CredentialVault } from "../main/credential-vault";
 import { createProductionUpdateAdapter } from "../main/update-adapter";
 import { createUpdateManager, type UpdateManager } from "../main/update-manager";
 import { ToolchainManager } from "../main/toolchains/manager";
 import { resolveRuntimeCatalogPath } from "../main/toolchains/catalog";
 import { isExecutionIntent } from "../shared/toolchains/types";
+import type { TestWorkbenchService } from "../main/test-workbench-service";
+import type { DeviceLicenseService } from "../main/device-license";
+import type { TestLicenseState } from "../contract/test-workbench";
 
 registerAppProtocol();
 crashReporter.start({
@@ -61,12 +64,10 @@ void app.whenReady().then(async () => {
   await toolchainManager.initialize();
 
   hostManager = new HostManager(resolveHostEntry(runtimeMainDirectory));
-  const smokeVaultPath = path.join(app.getPath("userData"), "smoke-channel-secrets.json");
+  const smokeVaultPath = path.join(app.getPath("userData"), "smoke-credential-vault.json");
   const credentialVault = new CredentialVault(smokeVaultPath);
   hostManager.setToolchainSnapshot(toolchainManager.getSnapshot());
-  const credentialRequestHandler = createCredentialRequestHandler(credentialVault);
   hostManager.setRequestHandler(async (method, params) => {
-    if (method.startsWith("channelSecrets.")) return credentialRequestHandler(method, params);
     if (method === "toolchain.getSnapshot") return toolchainManager.getSnapshot();
     if (method === "toolchain.resolve") {
       const body = (params ?? {}) as { cwd?: unknown; intent?: unknown; trusted?: unknown };
@@ -83,19 +84,13 @@ void app.whenReady().then(async () => {
     throw new Error(`Unsupported smoke Host request: ${method}`);
   });
   if (safeStorage.isEncryptionAvailable()) {
-    const key = "channel:feishu:smoke-test";
+    const key = "device:license:identity";
     credentialVault.set(key, {
-      token: "smoke-app-secret",
-      providerAccountId: "ou_smoke_bot",
-      baseUrl: "https://open.feishu.cn",
+      privateKeyDer: "smoke-private-key",
     });
     const rawVault = fs.readFileSync(smokeVaultPath, "utf8");
     const savedCredential = new CredentialVault(smokeVaultPath).get(key);
-    if (
-      rawVault.includes("smoke-app-secret") ||
-      savedCredential?.token !== "smoke-app-secret" ||
-      savedCredential.providerAccountId !== "ou_smoke_bot"
-    ) {
+    if (rawVault.includes("smoke-private-key") || savedCredential?.privateKeyDer !== "smoke-private-key") {
       finish(1, new Error("Credential vault reload failed"));
       return;
     }
@@ -106,6 +101,22 @@ void app.whenReady().then(async () => {
       /* ignore cleanup failure */
     }
   }
+  const smokeLicense: TestLicenseState = {
+    phase: "unlicensed",
+    authorized: false,
+    readOnly: true,
+    deviceCode: "SMOKE-TEST-ONLY",
+    deviceFingerprint: null,
+    checkedAt: null,
+    lastValidAt: null,
+    licenseId: null,
+    message: "Smoke test read-only mode",
+  };
+  const smokeWorkbench = { listRecentProjects: () => [] } as unknown as TestWorkbenchService;
+  const smokeDeviceLicense = {
+    getState: () => smokeLicense,
+    refresh: async () => smokeLicense,
+  } as unknown as DeviceLicenseService;
   installDesktopIpc({
     getHostManager: () => hostManager,
     getMainWindow: () => smokeWindow,
@@ -115,9 +126,8 @@ void app.whenReady().then(async () => {
     rescanToolchains: async (cwd) => (await toolchainManager.rescan({ cwd })).publicState,
     performToolchainAction: (request) => toolchainManager.performAction(request),
     chooseCustomTool: (capability, executable) => toolchainManager.registerCustomTool(capability, executable),
-    setChannelCredential: (payload) =>
-      credentialVault.set(`channel:${payload.channel}:${payload.accountId}`, payload.credential),
-    getBrowserService: () => null,
+    getTestWorkbench: () => smokeWorkbench,
+    getDeviceLicense: () => smokeDeviceLicense,
     updateManager,
   });
 

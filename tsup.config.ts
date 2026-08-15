@@ -4,10 +4,20 @@ import { readFileSync } from "node:fs";
 const packageJson = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")) as {
   dependencies?: Record<string, string>;
 };
+const deviceLicensePublic = JSON.parse(
+  readFileSync(new URL("./config/device-license-public.json", import.meta.url), "utf8"),
+) as { baseUrl?: string; publicKey?: string };
+const androidToolsBaseUrl = deviceLicensePublic.baseUrl ?? "";
 const expectedPiVersion = packageJson.dependencies?.["@earendil-works/pi-coding-agent"];
 if (!expectedPiVersion || !/^\d+\.\d+\.\d+$/.test(expectedPiVersion)) {
   throw new Error("@earendil-works/pi-coding-agent must be an exact dependency");
 }
+const mainProcessDefine = {
+  "process.env.PI_DESKTOP_EXPECTED_PI_VERSION": JSON.stringify(expectedPiVersion),
+  "process.env.PI_TEST_LICENSE_BASE_URL": JSON.stringify(deviceLicensePublic.baseUrl ?? ""),
+  "process.env.PI_TEST_LICENSE_PUBLIC_KEY": JSON.stringify(deviceLicensePublic.publicKey ?? ""),
+  "process.env.PI_TEST_ANDROID_TOOLS_BASE_URL": JSON.stringify(androidToolsBaseUrl),
+};
 const piVersionDefine = {
   "process.env.PI_DESKTOP_EXPECTED_PI_VERSION": JSON.stringify(expectedPiVersion),
 };
@@ -21,14 +31,14 @@ export default defineConfig([
     platform: "node",
     target: "node22",
     outDir: "out/main",
-    clean: true,
+    clean: false,
     sourcemap: true,
     // electron-updater is a production runtime dependency and resolves its
     // provider/platform implementation dynamically from the packaged app.
     external: ["electron", "electron-updater"],
     splitting: false,
     treeshake: true,
-    define: piVersionDefine,
+    define: mainProcessDefine,
     outExtension() {
       return { js: ".js" };
     },
@@ -37,7 +47,6 @@ export default defineConfig([
     // ESM — pi-coding-agent only exports "import" condition
     entry: {
       "agent-host": "src/agent-host/index.ts",
-      "plugin-worker": "src/agent-host/plugin-worker.ts",
     },
     format: ["esm"],
     platform: "node",

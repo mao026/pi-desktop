@@ -8,7 +8,7 @@
 
 Local-first · No local server · Cross-platform
 
-[![Desktop Build](https://github.com/DLYZZT/pi-desktop/actions/workflows/build-desktop.yml/badge.svg)](https://github.com/DLYZZT/pi-desktop/actions/workflows/build-desktop.yml)
+[![Desktop Build](https://github.com/mao026/pi-desktop/actions/workflows/build-desktop.yml/badge.svg)](https://github.com/mao026/pi-desktop/actions/workflows/build-desktop.yml)
 ![Electron 43](https://img.shields.io/badge/Electron-43-47848F?logo=electron&logoColor=white)
 ![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=0B1F2A)
 ![macOS, Windows & Linux](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)
@@ -16,7 +16,7 @@ Local-first · No local server · Cross-platform
 
 **English** · [简体中文](./README.md)
 
-[Download v0.1.7](https://github.com/DLYZZT/pi-desktop/releases/tag/v0.1.7) · [Screenshots](#screenshots) · [Features](#features) · [Quick start](#quick-start) · [Architecture](#architecture) · [Changelog](https://github.com/DLYZZT/pi-desktop/releases) · [Roadmap](#roadmap)
+[Download v0.1.7](https://github.com/mao026/pi-desktop/releases/tag/v0.1.7) · [Screenshots](#screenshots) · [Features](#features) · [Quick start](#quick-start) · [Architecture](#architecture) · [Changelog](https://github.com/mao026/pi-desktop/releases) · [Roadmap](#roadmap)
 
 </div>
 
@@ -105,7 +105,7 @@ Local-first · No local server · Cross-platform
 
 ### Use a desktop build
 
-The latest stable version is [v0.1.7](https://github.com/DLYZZT/pi-desktop/releases/tag/v0.1.7), with builds for macOS Apple Silicon and Intel, Windows x64, and Linux x64.
+The latest stable version is [v0.1.7](https://github.com/mao026/pi-desktop/releases/tag/v0.1.7), with builds for macOS Apple Silicon and Intel, Windows x64, and Linux x64.
 
 Pi Agent Desktop v0.1.7 bundles the Pi Coding Agent 0.84.0 runtime. Regular users do not need to install the Pi CLI, Pi Coding Agent, Node.js, or npm just to use the Agent. When a Skill, Plugin, or Agent script needs additional developer tools, the application first reuses healthy system installations and can install private runtimes after explicit user confirmation.
 
@@ -129,7 +129,7 @@ Pi Desktop first discovers and verifies the user's existing Node.js/npm, Python,
 ### Run locally
 
 ```bash
-git clone https://github.com/DLYZZT/pi-desktop.git
+git clone https://github.com/mao026/pi-desktop.git
 cd pi-desktop
 npm ci
 npm run dev
@@ -210,7 +210,7 @@ src/
 └── shared/        # Testable pure functions and shared modules
 ```
 
-Use [Issues](https://github.com/DLYZZT/pi-desktop/issues) for bug reports and suggestions. Pull requests are also welcome. Before submitting code, run at least:
+Use [Issues](https://github.com/mao026/pi-desktop/issues) for bug reports and suggestions. Pull requests are also welcome. Before submitting code, run at least:
 
 ```bash
 npm run verify

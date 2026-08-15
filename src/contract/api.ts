@@ -2,10 +2,8 @@ import type {
   AgentCommand,
   AgentEvent,
   CredentialMutationResult,
-  DirEntry,
   EntryContentResult,
   FileContent,
-  FileMeta,
   HistoryWindow,
   LoginProgressEvent,
   ModelPreferencesResult,
@@ -16,30 +14,9 @@ import type {
   RunningStateEvent,
   SessionDetail,
   SessionInfo,
+  SessionRuntimeState,
   TestResult,
-  WorktreeInfo,
 } from "./types";
-import type {
-  GitStatusResult,
-  PluginActionParams,
-  PluginsResponse,
-  SkillRecord,
-  SkillUpdateParams,
-} from "../shared/api-types";
-import type {
-  ChannelAccountConfig,
-  ChannelBinding,
-  ChannelBindingChange,
-  ChannelLoginEvent,
-  ChannelLoginStartRequest,
-  ChannelProbeResult,
-  ChannelsSnapshot,
-  ChannelStatus,
-  ChannelPairingRequest,
-  ChannelActivity,
-  ChannelId,
-  ChannelTestSendResult,
-} from "../shared/channel-types";
 import type { ToolCapabilityId, ToolProvider } from "../shared/toolchains/types";
 
 /** Request/response API surface (replaces HTTP routes). */
@@ -85,29 +62,6 @@ export interface Api {
     result: { ok: true };
   };
 
-  "worktrees.list": {
-    params: { projectRoot: string };
-    result: {
-      worktrees: WorktreeInfo[];
-      projectRoot: string;
-      isGit: boolean;
-      isTopLevel: boolean;
-    };
-  };
-  "worktrees.create": {
-    params: { projectRoot: string; branch: string; cwd?: string };
-    result: { worktree: WorktreeInfo };
-  };
-  "worktrees.remove": {
-    params: { path: string; cwd?: string; force?: boolean };
-    result: { ok: true };
-  };
-
-  "git.status": {
-    params: { path: string };
-    result: GitStatusResult;
-  };
-
   // Agent lifecycle
   "agent.new": {
     params: {
@@ -118,6 +72,7 @@ export interface Api {
       modelId?: string;
       toolNames?: string[];
       thinkingLevel?: string;
+      sessionMode?: "general" | "test";
       [key: string]: unknown;
     };
     result: { sessionId: string; data?: unknown };
@@ -128,100 +83,17 @@ export interface Api {
   };
   "agent.state": {
     params: { sessionId: string };
-    result: { running: boolean; state?: unknown };
+    result: { running: boolean; state?: SessionRuntimeState };
   };
 
-  // Messaging channels
-  "channels.list": { params: void; result: ChannelsSnapshot };
-  "channels.accountUpsert": {
-    params: { account: ChannelAccountConfig };
-    result: ChannelsSnapshot;
-  };
-  "channels.accountConnect": {
-    params: { account: ChannelAccountConfig };
-    result: ChannelsSnapshot;
-  };
-  "channels.accountDelete": {
-    params: { accountId: string };
-    result: ChannelsSnapshot;
-  };
-  "channels.start": { params: { accountId: string }; result: { ok: true } };
-  "channels.stop": { params: { accountId: string }; result: { ok: true } };
-  "channels.restart": { params: { accountId: string }; result: { ok: true } };
-  "channels.probe": { params: { accountId: string }; result: ChannelProbeResult };
-  "channels.loginStart": {
-    params: ChannelLoginStartRequest;
-    result: ChannelLoginEvent;
-  };
-  "channels.loginWait": {
-    params: { channel: ChannelId; sessionKey: string };
-    result: ChannelLoginEvent;
-  };
-  "channels.loginSubmitCode": {
-    params: { channel: ChannelId; sessionKey: string; code: string };
-    result: { ok: true };
-  };
-  "channels.loginCancel": {
-    params: { channel: ChannelId; sessionKey: string };
-    result: { ok: true };
-  };
-  "channels.pairingApprove": {
-    params: { pairingId: string };
-    result: ChannelsSnapshot;
-  };
-  "channels.pairingReject": {
-    params: { pairingId: string };
-    result: ChannelsSnapshot;
-  };
-  "channels.bindingUpsert": {
-    params: { binding: ChannelBinding };
-    result: ChannelsSnapshot;
-  };
-  "channels.bindingDelete": {
-    params: { bindingId: string };
-    result: ChannelsSnapshot;
-  };
-  "channels.testSend": {
-    params: { accountId: string; peerId: string; message: string };
-    result: ChannelTestSendResult;
-  };
-
-  // Files
-  "files.list": { params: { path: string }; result: { entries: DirEntry[] } };
+  // Read-only file access for markdown blob rendering
   "files.read": {
     params: { path: string; sourceSessionId?: string };
-    result: FileContent & {
-      encoding?: "utf8" | "base64" | "too_large";
-      mime?: string;
-    };
+    result: FileContent & { encoding?: "utf8" | "base64" | "too_large"; mime?: string };
   };
   "files.download": {
     params: { path: string; sourceSessionId?: string };
     result: { base64: string; size: number; mime: string };
-  };
-  "files.meta": {
-    params: { path: string; sourceSessionId?: string };
-    result: FileMeta;
-  };
-  "files.preview": {
-    params: { path: string; sourceSessionId?: string };
-    result: { kind: string; content?: string; base64?: string; mime?: string; [key: string]: unknown };
-  };
-  "files.index": {
-    params: { root: string; query?: string };
-    result: {
-      files: string[];
-      truncated: boolean;
-      matches?: Array<{ path: string; isDir?: boolean; score?: number }>;
-    };
-  };
-  "files.watchStart": {
-    params: { path: string; sourceSessionId?: string };
-    result: { ok: true };
-  };
-  "files.watchStop": {
-    params: { path: string };
-    result: { ok: true };
   };
 
   // Config
@@ -282,36 +154,6 @@ export interface Api {
     result: { ok: true };
   };
 
-  "skills.list": {
-    params: { cwd?: string } | void;
-    result: { skills: SkillRecord[]; diagnostics?: unknown[] };
-  };
-  "skills.search": {
-    params: { query: string };
-    result: { results: unknown[] };
-  };
-  "skills.install": {
-    params: { package: string; [key: string]: unknown };
-    result: { ok: true; [key: string]: unknown };
-  };
-  "skills.set": {
-    params: SkillUpdateParams;
-    result: { ok: true };
-  };
-  "skills.getContent": {
-    params: { cwd: string; filePath: string };
-    result: { content: string };
-  };
-
-  "plugins.list": {
-    params: { cwd?: string } | void;
-    result: PluginsResponse;
-  };
-  "plugins.set": {
-    params: PluginActionParams;
-    result: PluginsResponse;
-  };
-
   // System / desktop helpers exposed via Host (or main-bridged)
   "system.home": { params: void; result: { home: string } };
   "system.validateCwd": {
@@ -335,20 +177,8 @@ export interface Streams {
     deleted?: boolean;
     fullRefresh?: boolean;
   };
-  "files.changed": {
-    path: string;
-    event: "connected" | "change" | "error";
-    mtime?: string;
-    size?: number;
-    message?: string;
-  };
   "host.restarted": { reason: string };
   "host.ready": { ts: number };
-  "channels.status": ChannelStatus;
-  "channels.login": ChannelLoginEvent;
-  "channels.pairing": ChannelPairingRequest;
-  "channels.binding": ChannelBindingChange;
-  "channels.activity": ChannelActivity;
 }
 
 export type ApiMethod = keyof Api;

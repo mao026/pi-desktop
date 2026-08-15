@@ -1,6 +1,5 @@
-import { Component, type CSSProperties, type ErrorInfo, type ReactNode, useEffect, useState } from "react";
-import { AppShell } from "@/components/AppShell";
-import { ensureRpc, resetRpc } from "@/lib/api-client";
+import { Component, type CSSProperties, type ErrorInfo, type ReactNode, useEffect } from "react";
+import { TestWorkbench } from "@/components/TestWorkbench";
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state: { error: Error | null } = { error: null };
@@ -33,98 +32,21 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
 }
 
 export function App() {
-  const [ready, setReady] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [status, setStatus] = useState("Connecting…");
-
   useEffect(() => {
-    let cancelled = false;
-    setStatus(window.piBridge ? "Waiting for Agent Host…" : "piBridge missing (preload failed?)");
-
-    const connect = () => {
-      ensureRpc()
-        .then(() => {
-          if (!cancelled) {
-            setReady(true);
-            setError(null);
-          }
-        })
-        .catch((err) => {
-          if (!cancelled) {
-            setError(err instanceof Error ? err.message : String(err));
-            setReady(false);
-          }
-        });
-    };
-
-    connect();
-
-    const offRestart = window.piBridge?.onHostRestarted?.((payload) => {
-      console.warn("[pi-desktop] host restarted:", payload.reason);
-      resetRpc();
-      setReady(false);
-      setStatus("Agent Host restarted — reconnecting…");
-      setError(null);
-      connect();
-    });
-
-    const offCrash = window.piBridge?.onHostCrashed?.((payload) => {
-      resetRpc();
-      setReady(false);
-      setError(payload.detail || "Agent Host crashed and could not recover");
-    });
-
     const offMenuDiag = window.piBridge?.onMenu?.("export-diagnostics", () => {
       void window.piBridge?.exportDiagnostics?.();
     });
-
-    // Clear dock badge when user focuses the app
     const onFocus = () => window.piBridge?.clearBadge?.();
     window.addEventListener("focus", onFocus);
-
     return () => {
-      cancelled = true;
-      offRestart?.();
-      offCrash?.();
       offMenuDiag?.();
       window.removeEventListener("focus", onFocus);
     };
   }, []);
 
-  if (error) {
-    return (
-      <div style={centerStyle}>
-        <div style={cardStyle}>
-          <h1 style={titleStyle}>Cannot connect to Agent Host</h1>
-          <p style={bodyStyle}>{error}</p>
-          <p style={{ ...bodyStyle, fontSize: 12 }}>
-            Host must be running (utilityProcess). Check logs if this persists.
-          </p>
-          <button type="button" onClick={() => window.location.reload()} style={btnPrimary}>
-            Retry
-          </button>
-          <button type="button" onClick={() => void window.piBridge?.openLogs()} style={btnSecondary}>
-            Open logs
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  if (!ready) {
-    return (
-      <div style={centerStyle}>
-        <div style={{ ...cardStyle, textAlign: "center" }}>
-          <div style={{ fontSize: 13, color: "#57534a", marginBottom: 8 }}>{status}</div>
-          <div style={{ fontSize: 12, color: "#a19d92" }}>Pi Agent Desktop</div>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <ErrorBoundary>
-      <AppShell />
+      <TestWorkbench />
     </ErrorBoundary>
   );
 }
@@ -178,11 +100,4 @@ const btnPrimary: CSSProperties = {
   background: "#1c1a17",
   color: "#faf9f7",
   cursor: "pointer",
-};
-
-const btnSecondary: CSSProperties = {
-  ...btnPrimary,
-  marginLeft: 8,
-  background: "#fcfbf9",
-  color: "#1c1a17",
 };

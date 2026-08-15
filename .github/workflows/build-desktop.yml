@@ -135,6 +135,10 @@ jobs:
       - name: Build application
         run: npm run build
 
+      - name: Validate release license trust root
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: npm run check:license-release
+
       - name: Prepare verified bundled search tools
         run: npm run prepare:bundled-tools -- --target ${{ matrix.tool_target }}
 
@@ -373,27 +377,23 @@ jobs:
 
           function verifyUpdateConfig(file) {
             const document = fs.readFileSync(file, "utf8");
-            const [expectedOwner, expectedRepo] =
-              process.env.GITHUB_REPOSITORY.split("/");
-            const expected = {
-              provider: "github",
-              owner: expectedOwner,
-              repo: expectedRepo,
-            };
-
-            for (const [key, value] of Object.entries(expected)) {
-              const actual = readScalar(document, key);
-              if (actual !== value) {
-                throw new Error(
-                  `${file}: ${key} does not match the expected release repository`,
-                );
-              }
+            const ossConfig = JSON.parse(
+              fs.readFileSync("config/update-oss.json", "utf8"),
+            );
+            const expectedUrl = ossConfig.baseUrl.replace(/\/+$/, "");
+            if (readScalar(document, "provider") !== "generic") {
+              throw new Error(
+                `${file}: provider must be the generic update provider`,
+              );
+            }
+            if (readScalar(document, "url") !== expectedUrl) {
+              throw new Error(`${file}: url does not match config/update-oss.json`);
             }
 
             const forbidden = [
               [
                 "feed override field",
-                /^\s*(?:channel|host|protocol|requestHeaders|url)\s*:/im,
+                /^\s*(?:channel|host|protocol|requestHeaders)\s*:/im,
               ],
               [
                 "credential field",
@@ -540,6 +540,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Validate release license trust root
+        run: npm run check:license-release
+
       - name: Build application
         run: npm run build
 
@@ -594,27 +597,23 @@ jobs:
 
           function verifyUpdateConfig(file) {
             const document = fs.readFileSync(file, "utf8");
-            const [expectedOwner, expectedRepo] =
-              process.env.GITHUB_REPOSITORY.split("/");
-            const expected = {
-              provider: "github",
-              owner: expectedOwner,
-              repo: expectedRepo,
-            };
-
-            for (const [key, value] of Object.entries(expected)) {
-              const actual = readScalar(document, key);
-              if (actual !== value) {
-                throw new Error(
-                  `${file}: ${key} does not match the expected release repository`,
-                );
-              }
+            const ossConfig = JSON.parse(
+              fs.readFileSync("config/update-oss.json", "utf8"),
+            );
+            const expectedUrl = ossConfig.baseUrl.replace(/\/+$/, "");
+            if (readScalar(document, "provider") !== "generic") {
+              throw new Error(
+                `${file}: provider must be the generic update provider`,
+              );
+            }
+            if (readScalar(document, "url") !== expectedUrl) {
+              throw new Error(`${file}: url does not match config/update-oss.json`);
             }
 
             const forbidden = [
               [
                 "feed override field",
-                /^\s*(?:channel|host|protocol|requestHeaders|url)\s*:/im,
+                /^\s*(?:channel|host|protocol|requestHeaders)\s*:/im,
               ],
               [
                 "credential field",
@@ -705,6 +704,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Validate release license trust root
+        run: npm run check:license-release
 
       - name: Build application
         run: npm run build
@@ -817,3 +819,30 @@ jobs:
           else
             gh release create "$GITHUB_REF_NAME" "${files[@]}" --draft --generate-notes --verify-tag
           fi
+
+  release-oss:
+    name: Publish update feed to OSS
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [release]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment:
+      name: release
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: pi-desktop-*-release
+          path: dist
+          merge-multiple: true
+
+      - name: Publish update feed to OSS
+        env:
+          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+        run: |
+          node scripts/check-oss-update-config.mjs
+          node scripts/publish-oss.mjs

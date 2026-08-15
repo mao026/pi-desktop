@@ -3,7 +3,18 @@
  * Responsibilities: window lifecycle, menus, tray/badge, deep link,
  * Host supervision, system IPC. No business logic.
  */
-import { app, BrowserWindow, crashReporter, nativeTheme, nativeImage, net, Notification } from "electron";
+import {
+  app,
+  BrowserWindow,
+  clipboard,
+  crashReporter,
+  dialog,
+  nativeTheme,
+  nativeImage,
+  net,
+  Notification,
+  shell,
+} from "electron";
 import fs from "node:fs";
 import path from "path";
 import { HostManager, getUserDataPath, resolveHostEntry } from "./host-manager";
@@ -15,16 +26,35 @@ import { loadUiState } from "./window-state";
 import { createTray, destroyTray, setTrayRunningCount } from "./tray";
 import { createMainWindow } from "./window";
 import { installDesktopIpc } from "./ipc";
-import { createCredentialRequestHandler, CredentialVault } from "./credential-vault";
 import { createProductionUpdateAdapter, isProductionUpdatePlatformEnabled } from "./update-adapter";
 import { createUpdateManager, redactUpdateError, type UpdateManager } from "./update-manager";
+import { CredentialVault } from "./credential-vault";
+import { projectIdentityCredentialKey } from "./credential-key";
 import { ToolchainManager } from "./toolchains/manager";
 import { resolveRuntimeCatalogPath } from "./toolchains/catalog";
 import { resolveBundledCorePaths } from "./toolchains/bundled-core";
 import { isExecutionIntent, type ToolchainSnapshot } from "../shared/toolchains/types";
 import { readLegacyNpmCommand } from "./toolchains/legacy-npm-command";
 import { createElectronRuntimeFetch } from "./toolchains/electron-runtime-fetch";
-import { BrowserService } from "./browser/browser-service";
+import { AgentBrowserCliDriver, MainTestCoordinator, TestCoordinatorError } from "./test-coordinator";
+import { readBrowserState, TestWorkbenchService, TestWorkbenchStore } from "./test-workbench-service";
+import { createElectronZentaoFetch } from "./zentao-fetch";
+import { getSurfaceReadiness, surfaceNames } from "../../packages/pi-test/core/project";
+import {
+  openChromeExtensionManager,
+  prepareTestBrowserAssets,
+  unavailableTestBrowserAssets,
+} from "./test-browser-assets";
+import {
+  createFixedAndroidArtifactFetch,
+  installPlatformTools,
+  prepareTestAndroidAssets,
+  unavailableTestAndroidAssets,
+} from "./test-android-assets";
+import { HandsetsMobileDriver } from "./test-mobile-driver";
+import { defaultProbeExecutor } from "./toolchains/process-runner";
+import { DeviceLicenseService } from "./device-license";
+import { createElectronDeviceLicenseFetch } from "./device-license-fetch";
 
 // Must run before app ready
 registerAppProtocol();
@@ -37,13 +67,17 @@ crashReporter.start({
 const isDev = !app.isPackaged;
 const packagedStartupValidation = app.isPackaged && process.argv.includes("--validate-packaged-startup");
 const expectedPiVersion = process.env.PI_DESKTOP_EXPECTED_PI_VERSION;
+const testLicenseBaseUrl = process.env.PI_TEST_LICENSE_BASE_URL;
+const testLicensePublicKey = process.env.PI_TEST_LICENSE_PUBLIC_KEY;
+const androidToolsBaseUrl = process.env.PI_TEST_ANDROID_TOOLS_BASE_URL;
 const TOOLCHAIN_FOCUS_RESCAN_TTL_MS = 60_000;
 
 let mainWindow: BrowserWindow | null = null;
 let hostManager: HostManager | null = null;
 let updateManager: UpdateManager | null = null;
 let toolchainManager: ToolchainManager | null = null;
-let browserService: BrowserService | null = null;
+let testWorkbench: TestWorkbenchService | null = null;
+let deviceLicense: DeviceLicenseService | null = null;
 let isQuitting = false;
 let unreadBadge = 0;
 let pendingDeepLink: string | null = null;
@@ -53,6 +87,14 @@ let runningAgentSessionCount = 0;
 let startupRendererReady = false;
 let startupHostReady = false;
 let startupToolchainSnapshot: ToolchainSnapshot | null = null;
+let startupTestBrowserAssetsReady = false;
+let startupTestBrowserCliVersion: string | null = null;
+let startupTestBrowserExtensionVersion: string | null = null;
+let startupTestAndroidAssetsReady = false;
+let startupTestAndroidSupported = false;
+let startupTestHandsetsVersion: string | null = null;
+let startupTestPlatformToolsVersion: string | null = null;
+let startupTestPlatformToolsInstalled = false;
 let startupCheckFinished = false;
 let startupCheckTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -60,7 +102,15 @@ function finishPackagedStartupValidation(error?: string): void {
   if (!packagedStartupValidation || startupCheckFinished) return;
   if (!error) {
     const snapshot = startupToolchainSnapshot;
-    if (!startupRendererReady || !startupHostReady || !snapshot?.publicState.coreReady) return;
+    if (
+      !startupRendererReady ||
+      !startupHostReady ||
+      !snapshot?.publicState.coreReady ||
+      !startupTestBrowserAssetsReady ||
+      !startupTestAndroidAssetsReady
+    ) {
+      return;
+    }
     if (!expectedPiVersion || hostManager?.getPiVersion() !== expectedPiVersion) {
       error = `Agent Host Pi version mismatch: expected ${expectedPiVersion ?? "unknown"}, got ${hostManager?.getPiVersion() ?? "unknown"}`;
     }
@@ -86,6 +136,12 @@ function finishPackagedStartupValidation(error?: string): void {
           hostReady: startupHostReady,
           hostAckRevision: hostManager?.getToolchainAckRevision(),
           bundledSearch: ["search.rg", "search.fd"],
+          testBrowserCliVersion: startupTestBrowserCliVersion,
+          testBrowserExtensionVersion: startupTestBrowserExtensionVersion,
+          testAndroidSupported: startupTestAndroidSupported,
+          testHandsetsVersion: startupTestHandsetsVersion,
+          testPlatformToolsVersion: startupTestPlatformToolsVersion,
+          testPlatformToolsInstalled: startupTestPlatformToolsInstalled,
         };
     fs.mkdirSync(app.getPath("userData"), { recursive: true, mode: 0o700 });
     fs.writeFileSync(
@@ -168,13 +224,6 @@ app.on("open-url", (event, url) => {
   handleDeepLink(url);
 });
 
-app.on("login", (event, webContents, _details, authInfo, callback) => {
-  const credentials = browserService?.getProxyCredentialsForWebContents(webContents.id, authInfo.isProxy);
-  if (!credentials) return;
-  event.preventDefault();
-  callback(credentials.username, credentials.password);
-});
-
 function createWindow(): BrowserWindow {
   const win = createMainWindow({
     isDev,
@@ -187,16 +236,10 @@ function createWindow(): BrowserWindow {
     onClosed: (closedWindow) => {
       if (mainWindow === closedWindow) {
         mainWindow = null;
-        browserService?.handleWindowClosed();
       }
     },
-    onRendererUnavailable: () => browserService?.handleRendererUnavailable(),
   });
   mainWindow = win;
-  win.on("hide", () => browserService?.handleWindowVisibility(false));
-  win.on("minimize", () => browserService?.handleWindowVisibility(false));
-  win.on("show", () => browserService?.handleWindowVisibility(true));
-  win.on("restore", () => browserService?.handleWindowVisibility(true));
   win.on("focus", () => {
     const manager = toolchainManager;
     const now = Date.now();
@@ -216,7 +259,6 @@ function createWindow(): BrowserWindow {
     });
   }
   if (unreadBadge > 0) applyBadgeCount(unreadBadge);
-  void browserService?.restoreTabs();
   return win;
 }
 
@@ -245,16 +287,216 @@ void app.whenReady().then(async () => {
     );
   }
 
-  const credentialVault = new CredentialVault(getUserDataPath("channels.secrets.json"));
-  browserService = new BrowserService({
-    userDataDir: app.getPath("userData"),
-    getWindow: getMainWindow,
-    emit: (event) => {
-      const win = getMainWindow();
-      if (win && !win.isDestroyed()) win.webContents.send("browser:event", event);
-    },
-    onCapabilitySnapshot: (snapshot) => hostManager?.setBrowserCapabilitySnapshot(snapshot),
+  // The packaged asset probe must not invoke interactive OS credential storage.
+  const credentialVault = packagedStartupValidation
+    ? { has: () => false, get: () => null, set: () => undefined, delete: () => undefined }
+    : new CredentialVault(getUserDataPath("channels.secrets.json"));
+  deviceLicense = new DeviceLicenseService({
+    vault: credentialVault,
+    baseUrl: packagedStartupValidation ? "" : (testLicenseBaseUrl ?? ""),
+    publicKey: packagedStartupValidation ? "" : (testLicensePublicKey ?? ""),
+    cachePath: getUserDataPath("device-license-cache.json"),
+    appVersion: app.getVersion(),
+    fetchImpl: createElectronDeviceLicenseFetch((options) => net.request(options)),
+    bypass: !app.isPackaged && process.env.PI_TEST_LICENSE_BYPASS === "1",
+    log: (message) => appendMainLog(message),
   });
+  void deviceLicense.start();
+  const browserAssetOptions = {
+    platform: process.platform,
+    arch: process.arch,
+    userDataDir: app.getPath("userData"),
+    resourcesRoot: process.resourcesPath,
+    applicationRoot: app.getAppPath(),
+    env: process.env,
+    isPackaged: app.isPackaged,
+  };
+  let testBrowserAssets;
+  try {
+    testBrowserAssets = prepareTestBrowserAssets(browserAssetOptions);
+    startupTestBrowserAssetsReady = true;
+    startupTestBrowserCliVersion = testBrowserAssets.cliVersion;
+    startupTestBrowserExtensionVersion = testBrowserAssets.productExtensionVersion;
+    appendMainLog(
+      `test browser assets ready cli=${testBrowserAssets.cliVersion} extension=${testBrowserAssets.productExtensionVersion}`,
+    );
+  } catch (error) {
+    testBrowserAssets = unavailableTestBrowserAssets(browserAssetOptions, error);
+    appendMainLog(`test browser assets unavailable: ${testBrowserAssets.error}`);
+    if (packagedStartupValidation) {
+      finishPackagedStartupValidation(`Test browser assets unavailable: ${testBrowserAssets.error}`);
+    }
+  }
+  const androidAssetOptions = {
+    platform: process.platform,
+    arch: process.arch,
+    userDataDir: app.getPath("userData"),
+    resourcesRoot: process.resourcesPath,
+    applicationRoot: app.getAppPath(),
+    env: process.env,
+    isPackaged: app.isPackaged,
+    productBaseUrl: androidToolsBaseUrl ?? "",
+    fetchArtifact: createFixedAndroidArtifactFetch((options) => net.request(options)),
+    executor: defaultProbeExecutor,
+  };
+  let testAndroidAssets;
+  try {
+    testAndroidAssets = await prepareTestAndroidAssets(androidAssetOptions);
+    startupTestAndroidAssetsReady = true;
+    startupTestAndroidSupported = testAndroidAssets.supported;
+    startupTestHandsetsVersion = testAndroidAssets.handsetsVersion;
+    startupTestPlatformToolsVersion = testAndroidAssets.platformToolsVersion;
+    startupTestPlatformToolsInstalled = testAndroidAssets.platformToolsInstalled;
+    appendMainLog(
+      `test Android assets supported=${testAndroidAssets.supported} hs=${testAndroidAssets.handsetsVersion} adb=${testAndroidAssets.platformToolsInstalled}`,
+    );
+  } catch (error) {
+    testAndroidAssets = unavailableTestAndroidAssets(androidAssetOptions, error);
+    appendMainLog(`test Android assets unavailable: ${testAndroidAssets.error}`);
+    if (packagedStartupValidation && process.platform === "win32") {
+      finishPackagedStartupValidation(`Test Android assets unavailable: ${testAndroidAssets.error}`);
+    } else {
+      startupTestAndroidAssetsReady = true;
+    }
+  }
+  const assertTestLicensed = () => deviceLicense!.assertLicensed();
+  const testBrowserDriver = new AgentBrowserCliDriver(testBrowserAssets.cliPath, defaultProbeExecutor);
+  const testWorkbenchStore = new TestWorkbenchStore(getUserDataPath("test-workbench.json"));
+  const testMobileDriver = testAndroidAssets.supported
+    ? new HandsetsMobileDriver(testAndroidAssets, process.env, defaultProbeExecutor)
+    : undefined;
+  const testCoordinator = new MainTestCoordinator({
+    browser: testBrowserDriver,
+    mobile: testMobileDriver,
+    assertLicensed: assertTestLicensed,
+    assertBrowserReady: async () => {
+      if (!testBrowserAssets.prepared) {
+        throw new TestCoordinatorError("BROWSER_ASSETS_UNAVAILABLE", testBrowserAssets.error ?? "浏览器资产不可用");
+      }
+      const inspected = await testBrowserDriver.inspect();
+      if (!readBrowserState(inspected.status, inspected.tabs, testBrowserAssets).ready) {
+        throw new TestCoordinatorError(
+          "BROWSER_NOT_READY",
+          `请连接 Chrome 扩展 ${testBrowserAssets.productExtensionVersion} 并打开普通网页`,
+        );
+      }
+    },
+    resolveBrowserBinding: (projectId, projectRoot, surface) =>
+      testWorkbenchStore.getBinding(projectId, projectRoot, surface),
+    saveBrowserBinding: (projectId, projectRoot, surface, binding) =>
+      testWorkbenchStore.setBinding(projectId, projectRoot, surface, binding),
+    isConfirmed: () => false,
+    identityStatus: (project) =>
+      Object.entries(project.identities).map(([id, identity]) => ({
+        id,
+        name: identity.name,
+        surfaces: identity.surfaces,
+        defaultSurfaces: Object.entries(project.defaultIdentityBySurface).flatMap(([surface, identityId]) =>
+          identityId === id ? [surface as keyof typeof project.surfaces] : [],
+        ),
+        credentialConfigured: (() => {
+          try {
+            return credentialVault.has(projectIdentityCredentialKey(project.id, id));
+          } catch {
+            return false;
+          }
+        })(),
+      })),
+    setupReadiness: async (root, project) => {
+      const surfaces = [];
+      for (const surface of surfaceNames(project)) {
+        const configured = getSurfaceReadiness(project, surface);
+        if (!configured.ready || surface === "miniprogram") {
+          surfaces.push({
+            ...configured,
+            ready: false,
+            status: "manual" as const,
+            ...(surface === "miniprogram"
+              ? { code: "driver_not_implemented", nextStep: "微信小程序自动化尚未实现" }
+              : {}),
+          });
+          continue;
+        }
+        if (surface === "app") {
+          const mobile = await testWorkbench!.getMobileState(root);
+          surfaces.push({
+            surface,
+            ready: mobile.ready,
+            status: mobile.ready ? ("ok" as const) : ("manual" as const),
+            ...(mobile.ready ? {} : { code: "mobile_not_ready", nextStep: mobile.summary }),
+          });
+          continue;
+        }
+        const browser = await testWorkbench!.getBrowserState(root, surface);
+        surfaces.push({
+          surface,
+          ready: browser.ready && browser.binding?.tabId !== undefined,
+          status: browser.ready && browser.binding?.tabId !== undefined ? ("ok" as const) : ("manual" as const),
+          ...(browser.ready && browser.binding?.tabId !== undefined
+            ? {}
+            : { code: "browser_not_ready", nextStep: "请连接固定 Chrome 扩展并绑定测试页面" }),
+        });
+      }
+      return surfaces;
+    },
+    validateEvidence: (root, evidence) => testWorkbench!.validateEvidence(root, evidence),
+    confirmRisk: async ({ projectName, surface, risk, scope, action }) => {
+      const win = getMainWindow();
+      const target = action.type === "click" || action.type === "fill" ? action.target : action.type;
+      const result = await dialog.showMessageBox(win ?? undefined!, {
+        type: risk === "high" ? "warning" : "question",
+        title: risk === "high" ? "确认高风险测试操作" : "确认本次业务写入范围",
+        message: `${projectName} · ${surface.toUpperCase()}`,
+        detail:
+          scope === "run"
+            ? "本次执行允许在该测试端完成已声明的业务写入。高风险动作仍会单独确认。"
+            : `动作：${action.type}\n目标：${target}\n风险：高风险`,
+        buttons: ["取消", "继续"],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+      });
+      return result.response === 1;
+    },
+  });
+  testWorkbench = new TestWorkbenchService(
+    testCoordinator,
+    testBrowserDriver,
+    testWorkbenchStore,
+    assertTestLicensed,
+    testBrowserAssets,
+    (extensionPath) => clipboard.writeText(extensionPath),
+    () => openChromeExtensionManager({ platform: process.platform, env: process.env }),
+    testAndroidAssets,
+    testMobileDriver,
+    () => installPlatformTools(testAndroidAssets, androidAssetOptions),
+    credentialVault,
+    (projectRoot) => shell.trashItem(projectRoot),
+    createElectronZentaoFetch(
+      (options) => net.request(options),
+      async (host) => (await net.resolveHost(host, { cacheUsage: "disallowed" })).endpoints.map((item) => item.address),
+    ),
+  );
+  let testRunsRecovered = false;
+  deviceLicense.subscribe((state) => {
+    if (state.authorized && !testRunsRecovered) {
+      testRunsRecovered = true;
+      testWorkbench?.recoverStaleRuns();
+    }
+    if (!state.authorized && state.phase !== "checking") {
+      testCoordinator.authorizationLost();
+      hostManager?.stop();
+    } else if (state.authorized && hostManager?.getStatus() === "stopped") {
+      hostManager.start();
+    }
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send("test-license:state", state);
+    }
+  });
+  if (deviceLicense.getState().authorized) {
+    testRunsRecovered = true;
+    testWorkbench.recoverStaleRuns();
+  }
   const ui = loadUiState();
   const updaterTestMode = !app.isPackaged && process.env.PI_DESKTOP_TEST_UPDATER === "1";
   const updaterSupported =
@@ -379,9 +621,8 @@ void app.whenReady().then(async () => {
     },
     performToolchainAction: (request) => toolchainManager!.performAction(request),
     chooseCustomTool: (capability, executable) => toolchainManager!.registerCustomTool(capability, executable),
-    setChannelCredential: (payload) =>
-      credentialVault.set(`channel:${payload.channel}:${payload.accountId}`, payload.credential),
-    getBrowserService: () => browserService,
+    getTestWorkbench: () => testWorkbench,
+    getDeviceLicense: () => deviceLicense,
     updateManager,
   });
   installAppMenu(getMainWindow, () => openUpdateSettings(true));
@@ -395,10 +636,7 @@ void app.whenReady().then(async () => {
 
   hostManager = new HostManager(resolveHostEntry());
   hostManager.setToolchainSnapshot(toolchainManager.getSnapshot());
-  hostManager.setBrowserCapabilitySnapshot(browserService.getCapabilitySnapshot());
-  const credentialRequestHandler = createCredentialRequestHandler(credentialVault);
   hostManager.setRequestHandler(async (method, params) => {
-    if (method.startsWith("channelSecrets.")) return credentialRequestHandler(method, params);
     if (method === "toolchain.getSnapshot") return toolchainManager!.getSnapshot();
     if (method === "toolchain.resolve") {
       const body = (params ?? {}) as { cwd?: unknown; intent?: unknown; trusted?: unknown };
@@ -414,8 +652,19 @@ void app.whenReady().then(async () => {
       }
       return toolchainManager!.resolveForProject(body.cwd, { intent: body.intent, trusted: body.trusted });
     }
-    if (method.startsWith("browser.")) {
-      return browserService!.handleHostRequest(method, params);
+    if (
+      method === "test.authorizeSession" ||
+      method === "test.setup" ||
+      method === "test.run" ||
+      method === "test.map" ||
+      method === "test.case" ||
+      method === "test.finding" ||
+      method === "test.play" ||
+      method === "test.observe" ||
+      method === "test.act" ||
+      method === "test.sessionEnded"
+    ) {
+      return testCoordinator.call(method, params as never);
     }
     throw new Error(`Unsupported Host request: ${method}`);
   });
@@ -427,10 +676,10 @@ void app.whenReady().then(async () => {
       else finishPackagedStartupValidation();
     }
     if (status !== "ready") {
+      testCoordinator.hostStopped();
       runningAgentSessionCount = 0;
       setTrayRunningCount(0, getMainWindow);
       updateManager?.setRunningSessionCount(0);
-      browserService?.onHostStopped();
     }
     for (const win of BrowserWindow.getAllWindows()) {
       win.webContents.send("host:status", { status, detail });
@@ -478,7 +727,7 @@ void app.whenReady().then(async () => {
     }
   });
 
-  hostManager.start();
+  if (deviceLicense.getState().authorized || packagedStartupValidation) hostManager.start();
 
   createWindow();
   void toolchainManager.initialize();
@@ -496,21 +745,9 @@ void app.whenReady().then(async () => {
 app.on("before-quit", () => {
   isQuitting = true;
   updateManager?.stopAutomaticChecks();
+  deviceLicense?.stop();
   destroyTray();
   hostManager?.stop();
-  void browserService?.dispose();
-});
-
-app.on("certificate-error", (event, webContents, url, _error, _certificate, callback) => {
-  try {
-    const hostname = new URL(url).hostname;
-    if (browserService?.handleCertificateError(webContents.id, hostname)) {
-      event.preventDefault();
-      callback(true);
-    }
-  } catch {
-    // Chromium's default certificate policy remains in force.
-  }
 });
 
 app.on("window-all-closed", () => {

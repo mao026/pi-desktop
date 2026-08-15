@@ -97,13 +97,21 @@ export async function runProbeCommand(command: ProbeCommand): Promise<ProbeResul
       });
     };
 
-    const stopForOutputLimit = (): void => {
-      outputLimitExceeded = true;
+    const stop = (): void => {
+      child.stdin?.destroy();
+      child.stdout?.destroy();
+      child.stderr?.destroy();
       try {
         child.kill();
       } catch {
         /* process may already have exited */
       }
+      finish(child.exitCode, child.signalCode);
+    };
+
+    const stopForOutputLimit = (): void => {
+      outputLimitExceeded = true;
+      stop();
     };
 
     child.stdout?.on("data", (value: Buffer | string) => {
@@ -126,11 +134,7 @@ export async function runProbeCommand(command: ProbeCommand): Promise<ProbeResul
 
     const timer = setTimeout(() => {
       timedOut = true;
-      try {
-        child.kill();
-      } catch {
-        /* process may already have exited */
-      }
+      stop();
     }, timeoutMs);
     timer.unref();
 

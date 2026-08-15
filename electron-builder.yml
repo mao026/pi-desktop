@@ -28,6 +28,10 @@ files:
   # exclusions Linux asar packaging can hard-link JSON/images twice (EEXIST).
   - "!node_modules/@earendil-works/pi-coding-agent/docs/**/*"
   - "!node_modules/@earendil-works/pi-coding-agent/examples/**/*"
+  - from: packages/pi-test/workflows
+    to: packages/pi-test/workflows
+    filter:
+      - "**/*"
   # Pi injects these package-relative paths into the agent system prompt when
   # users ask it to author extensions, packages, SDK integrations, or TUI UI.
   # Restore them after the broad Markdown/TypeScript production exclusions.
@@ -106,10 +110,15 @@ extraResources:
     to: toolchains/runtime-catalog.json
   - from: build/toolchains/core-catalog.json
     to: toolchains/core-catalog.json
-  - from: build/toolchains/core/${platform}-${arch}
-    to: toolchains/core/${platform}-${arch}
+  - from: build/chrome-extension
+    to: chrome-extension
 
 mac:
+  extraResources:
+    - from: build/toolchains/core/darwin-${arch}
+      to: toolchains/core/darwin-${arch}
+    - from: build/test-browser/darwin-${arch}
+      to: test-browser/darwin-${arch}
   category: public.app-category.developer-tools
   hardenedRuntime: true
   gatekeeperAssess: false
@@ -127,6 +136,21 @@ mac:
   artifactName: Pi-Agent-Desktop-${version}-${arch}.${ext}
 
 win:
+  files:
+    - from: build/toolchains/native/win32-x64/@mariozechner/clipboard-win32-x64-msvc
+      to: node_modules/@mariozechner/clipboard-win32-x64-msvc
+      filter:
+        - package.json
+        - clipboard.win32-x64-msvc.node
+  extraResources:
+    - from: build/toolchains/core/win32-x64
+      to: toolchains/core/win32-x64
+    - from: build/test-browser/win32-x64
+      to: test-browser/win32-x64
+    - from: build/chrome-extension
+      to: chrome-extension
+    - from: build/test-android/win32-x64
+      to: test-android/win32-x64
   target:
     - target: nsis
       arch:
@@ -141,6 +165,11 @@ nsis:
   shortcutName: Pi Agent Desktop
 
 linux:
+  extraResources:
+    - from: build/toolchains/core/linux-x64
+      to: toolchains/core/linux-x64
+    - from: build/test-browser/linux-x64
+      to: test-browser/linux-x64
   executableName: pi-agent-desktop
   # Override electron-builder's unsafe default AppImage argument. Keep Chromium
   # sandboxing enabled and use an app-owned inert launch marker instead.
@@ -160,7 +189,5 @@ protocols:
       - pi-agent-desktop
 
 publish:
-  provider: github
-  owner: DLYZZT
-  repo: pi-desktop
-  releaseType: draft
+  provider: generic
+  url: https://shenzhen-agent.oss-cn-shenzhen.aliyuncs.com/updates

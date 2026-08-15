@@ -7,6 +7,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const mainBundle = readFileSync(path.join(root, "out", "main", "main.js"), "utf8");
 const builderConfig = readFileSync(path.join(root, "electron-builder.yml"), "utf8");
 const packageJson = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
+const deviceLicensePublic = JSON.parse(readFileSync(path.join(root, "config", "device-license-public.json"), "utf8"));
 const packageLock = JSON.parse(readFileSync(path.join(root, "package-lock.json"), "utf8"));
 const updaterVersion = packageJson.dependencies?.["electron-updater"];
 const lockedUpdaterVersion = packageLock.packages?.["node_modules/electron-updater"]?.version;
@@ -21,8 +22,24 @@ const requiredMarkers = [
   "desktop:update:check",
   "--validate-packaged-startup",
   "packaged-startup-check.json",
+  "device-license-cache.json",
+  "desktop:test:refresh-license",
+  "desktop:test:copy-browser-extension-path",
+  "2.1-pi-test.2",
+  "agent-browser-cli",
+  "test-android",
+  "0.1.38",
+  "37.0.1",
+  "desktop:test:install-android-tools",
+  "DEVICE_LICENSE_REQUIRED",
+  "desktop-testing",
 ];
 const missing = requiredMarkers.filter((marker) => !mainBundle.includes(marker));
+const licenseTrustRootIsEmbedded =
+  typeof deviceLicensePublic.baseUrl === "string" &&
+  typeof deviceLicensePublic.publicKey === "string" &&
+  mainBundle.includes(deviceLicensePublic.baseUrl) &&
+  mainBundle.includes(deviceLicensePublic.publicKey);
 const forbiddenMarkers = [
   "runSmokeHostChecks",
   "Smoke RPC timed out",
@@ -33,6 +50,9 @@ const forbiddenMarkers = [
   "GH_TOKEN",
   "MAC_CSC_LINK",
   "APPLE_APP_SPECIFIC_PASSWORD",
+  "PI_TEST_LICENSE_BASE_URL",
+  "PI_TEST_LICENSE_PUBLIC_KEY",
+  "BEGIN PRIVATE KEY",
 ];
 const found = forbiddenMarkers.filter((marker) => mainBundle.includes(marker));
 const leakedCredentials = [
@@ -85,13 +105,31 @@ const toolchainCatalogPackagingIsValid =
   builderConfig.includes("to: toolchains/runtime-catalog.json") &&
   builderConfig.includes("from: build/toolchains/core-catalog.json") &&
   builderConfig.includes("to: toolchains/core-catalog.json") &&
-  builderConfig.includes("from: build/toolchains/core/${platform}-${arch}") &&
-  builderConfig.includes("to: toolchains/core/${platform}-${arch}") &&
+  builderConfig.includes("from: build/toolchains/core/darwin-${arch}") &&
+  builderConfig.includes("to: toolchains/core/darwin-${arch}") &&
+  builderConfig.includes("from: build/test-browser/darwin-${arch}") &&
+  builderConfig.includes("to: test-browser/darwin-${arch}") &&
+  builderConfig.includes("from: build/toolchains/core/win32-x64") &&
+  builderConfig.includes("to: toolchains/core/win32-x64") &&
+  builderConfig.includes("from: build/test-browser/win32-x64") &&
+  builderConfig.includes("to: test-browser/win32-x64") &&
+  builderConfig.includes("from: build/toolchains/core/linux-x64") &&
+  builderConfig.includes("to: toolchains/core/linux-x64") &&
+  builderConfig.includes("from: build/test-browser/linux-x64") &&
+  builderConfig.includes("to: test-browser/linux-x64") &&
+  !builderConfig.includes("from: build/toolchains/core/${platform}-${arch}") &&
+  !builderConfig.includes("from: build/test-browser/${platform}-${arch}") &&
+  builderConfig.includes("from: build/chrome-extension") &&
+  builderConfig.includes("to: chrome-extension") &&
+  builderConfig.includes("from: build/test-android/win32-x64") &&
+  builderConfig.includes("to: test-android/win32-x64") &&
+  !builderConfig.includes("from: build/test-android/${platform}-${arch}") &&
   builderConfig.includes("executableName: pi-agent-desktop") &&
   !/from:\s*build\/toolchains\/(?:archives|downloads|runtimes)/i.test(builderConfig);
 
 if (
   !updaterDependencyIsValid ||
+  !licenseTrustRootIsEmbedded ||
   !toolchainCatalogPackagingIsValid ||
   missing.length > 0 ||
   found.length > 0 ||
@@ -101,6 +139,9 @@ if (
 ) {
   if (!updaterDependencyIsValid) {
     console.error("FAIL: electron-updater must be an exact production dependency matching package-lock.json");
+  }
+  if (!licenseTrustRootIsEmbedded) {
+    console.error("FAIL: production main bundle must embed the fixed device license origin and public key");
   }
   for (const marker of missing) console.error(`FAIL: production main bundle is missing updater marker: ${marker}`);
   for (const marker of found) console.error(`FAIL: production main bundle contains forbidden marker: ${marker}`);
@@ -115,12 +156,12 @@ if (
   }
   if (!toolchainCatalogPackagingIsValid) {
     console.error(
-      "FAIL: production packaging must include third-party notices, fixed catalogs, and only target-specific bundled core tools",
+      "FAIL: production packaging must include third-party notices, target-specific core/browser tools, the fixed Chrome extension, and Windows-only Handsets assets",
     );
   }
   process.exit(1);
 }
 
 console.log(
-  `OK: electron-updater ${updaterVersion} is locked for production; main bundle contains ${requiredMarkers.length} updater markers, excludes ${forbiddenMarkers.length} forbidden markers, packaging retains ${requiredPackageExclusions.length} source exclusions and explicit Pi authoring asset FileSets, and fixed catalogs plus target-specific core tools are packaged without managed runtime archives`,
+  `OK: electron-updater ${updaterVersion} is locked for production; the fixed device license trust root is embedded; main bundle contains ${requiredMarkers.length} product markers, excludes ${forbiddenMarkers.length} forbidden markers, packaging retains ${requiredPackageExclusions.length} source exclusions and explicit Pi authoring asset FileSets, and fixed target assets are packaged without managed runtime archives`,
 );

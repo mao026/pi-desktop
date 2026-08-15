@@ -3,6 +3,7 @@
  * Dev orchestration: Vite (renderer) + tsup watch (main/preload/host) + Electron.
  */
 import { spawn } from "child_process";
+import { rmSync } from "node:fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -43,6 +44,7 @@ process.on("SIGINT", () => shutdown(0));
 process.on("SIGTERM", () => shutdown(0));
 
 // 1) Build main once, then watch
+rmSync(path.join(root, "out", "main"), { recursive: true, force: true });
 console.log("[dev] building main/preload/host…");
 const build = spawn("npx", ["tsup", "--config", "tsup.config.ts"], {
   cwd: root,
@@ -65,6 +67,7 @@ build.on("exit", (code) => {
       env: {
         VITE_DEV_SERVER_URL: "http://localhost:5173",
         ELECTRON_DISABLE_SECURITY_WARNINGS: "1",
+        PI_TEST_LICENSE_BYPASS: "1",
       },
     });
   }, 2000);

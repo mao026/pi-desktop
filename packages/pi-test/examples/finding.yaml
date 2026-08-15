@@ -1,0 +1,44 @@
+schemaVersion: 1
+id: f-login-button-miss
+projectId: ydj
+title: 登录按钮偶发不展示
+status: open
+severity: p2
+confidence: observed
+surface: h5
+createdAt: 2026-08-11T07:31:00Z
+updatedAt: 2026-08-11T07:31:00Z
+
+runIds:
+  - run-20260811-1530-smoke
+caseId: login-h5
+duplicateOf: null
+
+summary: 点击登录后按钮消失且无跳转
+stepsToReproduce:
+  - 打开 H5 登录页
+  - 输入手机号与验证码
+  - 点击登录
+expected: 进入首页
+actual: 按钮消失，仍停在登录页
+
+evidence:
+  - runs/2026-08-11-1530-smoke/evidence/login-h5-after-login.jpg
+
+env:
+  note: Chrome / 测试环境
+
+tags: [auth]
+
+retests: []
+
+remote:
+  provider: zentao
+  connectionId: company-zentao
+  marker: "Pi-Test: ydj/f-login-button-miss"
+  syncStatus: submitted
+  bugId: 42
+  url: https://zentao.example.com/index.php?m=bug&f=view&bugID=42
+  status: active
+  lastSyncedAt: 2026-08-11T08:00:00Z
+  lastError: null

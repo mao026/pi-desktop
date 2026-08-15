@@ -1,0 +1,45 @@
+schemaVersion: 1
+id: run-20260811-1530-smoke
+projectId: ydj
+status: passed
+trigger: regression
+createdAt: 2026-08-11T07:30:00Z
+startedAt: 2026-08-11T07:30:01Z
+finishedAt: 2026-08-11T07:32:10Z
+title: 冒烟
+note: null
+
+cases:
+  - id: login-h5
+    status: passed
+    startedAt: 2026-08-11T07:30:02Z
+    finishedAt: 2026-08-11T07:31:40Z
+    error: null
+    evidence:
+      - evidence/login-h5-after-login.jpg
+
+env:
+  surfaces: [h5]
+  browser: chrome+agent-browser-cli
+  deviceSerial: null
+  deviceModel: null
+  toolVersions:
+    agent-browser-cli: "0.3.7"
+    hs: null
+
+journal:
+  - at: 2026-08-11T07:30:05Z
+    surface: h5
+    kind: step
+    summary: 打开 H5 并完成登录
+    evidence:
+      - evidence/login-h5-after-login.jpg
+
+findings: []
+
+summary:
+  passed: 1
+  failed: 0
+  blocked: 0
+  skipped: 0
+  text: 登录冒烟通过

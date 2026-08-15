@@ -238,10 +238,6 @@ export async function setModelPreferences(cwd: string | undefined, enabledModels
   return call("models.preferences.set", { ...(cwd ? { cwd } : {}), enabledModels });
 }
 
-export async function listWorktrees(projectRoot: string) {
-  return call("worktrees.list", { projectRoot });
-}
-
 export async function validateCwd(path: string) {
   return call("system.validateCwd", { path });
 }
@@ -254,20 +250,8 @@ export async function getHome() {
   return call("system.home");
 }
 
-export async function listFiles(path: string) {
-  return call("files.list", { path });
-}
-
 export async function readFile(path: string, sourceSessionId?: string) {
   return call("files.read", { path, sourceSessionId });
-}
-
-export async function fileMeta(path: string, sourceSessionId?: string) {
-  return call("files.meta", { path, sourceSessionId });
-}
-
-export async function fileIndex(root: string, query?: string) {
-  return call("files.index", { root, query });
 }
 
 export async function subscribeAgentEvents(sessionId: string, on: (ev: Streams["agent.events"]) => void) {

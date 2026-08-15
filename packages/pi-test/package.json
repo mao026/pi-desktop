@@ -1,0 +1,25 @@
+{
+  "name": "pi-test",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pi exploratory testing: H5 / admin / Android app",
+  "keywords": [
+    "pi-package",
+    "testing"
+  ],
+  "dependencies": {
+    "yaml": "^2.8.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "scripts": {
+    "selfcheck": "node --import tsx scripts/selfcheck.mjs",
+    "test": "npm run selfcheck && node --import tsx --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.12"
+  }
+}

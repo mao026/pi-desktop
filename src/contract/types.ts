@@ -65,6 +65,7 @@ export interface EntryContentResult {
 }
 
 export interface SessionRuntimeState {
+  model?: { provider: string; id: string } | null;
   contextUsage?: { percent: number | null; contextWindow: number; tokens: number | null } | null;
   systemPrompt?: string;
   thinkingLevel?: string;
@@ -77,21 +78,6 @@ export interface SessionRuntimeState {
   [key: string]: unknown;
 }
 
-export interface WorktreeInfo {
-  path: string;
-  branch?: string | null;
-  isMain?: boolean;
-}
-
-export interface DirEntry {
-  name: string;
-  path: string;
-  type: "file" | "directory";
-  size?: number;
-  mtime?: number;
-  [key: string]: unknown;
-}
-
 export interface FileContent {
   content: string;
   language?: string;
@@ -101,25 +87,11 @@ export interface FileContent {
   [key: string]: unknown;
 }
 
-export interface FileMeta {
-  size: number;
-  mtime: number;
-  language?: string;
-  kind?: string;
-  mime?: string;
-  [key: string]: unknown;
-}
-
-export interface FuzzyMatch {
-  path: string;
-  score: number;
-  [key: string]: unknown;
-}
-
 export interface ModelInfo {
   id: string;
   name: string;
   provider: string;
+  input: Array<"text" | "image">;
 }
 
 export interface ModelCatalogWarning {

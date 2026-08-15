@@ -1,0 +1,30 @@
+schemaVersion: 1
+id: login-h5
+title: H5 登录
+description: 手机号 + 验证码登录到首页
+surface: h5
+status: draft
+tags: [auth, smoke]
+risk: normal
+createdAt: 2026-08-11T08:00:00Z
+updatedAt: 2026-08-11T08:00:00Z
+
+pre:
+  - open: "{{surfaces.h5.url}}"
+
+steps:
+  - act: fill
+    target: "手机号"
+    value: "{{input.phone}}"
+  - act: fill
+    target: "验证码"
+    value: "{{input.sms}}"
+  - act: tap
+    target: "登录"
+  - act: wait
+    text: "首页"
+  - act: shot
+    name: after-login
+
+assert:
+  - see: "首页"
