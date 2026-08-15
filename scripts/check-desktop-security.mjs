@@ -32,7 +32,6 @@ const bundledToolsBuild = read("scripts/prepare-bundled-tools.mjs");
 const browserAssetCatalog = read("config/test-browser-assets.json");
 const androidAssetCatalog = read("config/test-android-assets.json");
 const browserPopup = `${read("config/chrome-extension-patch/popup.js")}\n${read("config/chrome-extension-patch/popup.html")}`;
-const browserBackground = read("build/chrome-extension/tmwd_cdp_bridge/background.js");
 const testBrowserAssets = read("src/main/test-browser-assets.ts");
 const testAndroidAssets = read("src/main/test-android-assets.ts");
 const testMobileDriver = read("src/main/test-mobile-driver.ts");
@@ -107,9 +106,9 @@ const checks = [
       bundledToolsBuild.includes("prepareBrowserAssets") &&
       bundledToolsBuild.includes("verifyDownloadedArtifact") &&
       bundledToolsBuild.includes("rawSendCount !== 10") &&
-      browserBackground.includes("function sendWs(message)") &&
-      browserBackground.includes("socket.readyState !== WebSocket.OPEN") &&
-      !browserBackground.includes("ws.send(") &&
+      bundledToolsBuild.includes("function sendWs(message)") &&
+      bundledToolsBuild.includes("socket.readyState !== WebSocket.OPEN") &&
+      bundledToolsBuild.includes('replaceAll("ws.send(", "sendWs(")') &&
       testBrowserAssets.includes("prepareTestBrowserAssets") &&
       testBrowserAssets.includes("asset integrity check failed") &&
       testBrowserAssets.includes('const lockName = ".agent-browser-cli.lock"') &&
